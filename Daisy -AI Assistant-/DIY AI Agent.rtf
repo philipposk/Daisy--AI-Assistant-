@@ -1,0 +1,120 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2865
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;\f1\fnil\fcharset0 LucidaGrande;\f2\fnil\fcharset0 Menlo-Regular;
+}
+{\colortbl;\red255\green255\blue255;\red0\green0\blue0;}
+{\*\expandedcolortbl;;\csgray\c0;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 Make home ai:\
+\
+# 1.  Install the local stack\
+brew install python@3.11\
+python3 -m pip install --upgrade open-interpreter groq pillow pynput\
+\
+# 2.  Add Groq key (free from https://console.groq.com)\
+export GROQ_API_KEY="YOUR_GROQ_API_KEY_HERE"\
+\
+# 3.  Optional: keep history forever\
+mkdir -p ~/.interpreter/conversations\
+\
+# 1.  create the project folder\
+mkdir -p ~/groq_agent && cd ~/groq_agent\
+\
+# 2.  create the agent file (nano opens)\
+nano groq_home_ai.py\
+\
+Paste this python file in the nano window: \
+\
+\
+\
+#!/usr/bin/env python3\
+"""\
+Hybrid Home-AI  \'96  Groq thinks, laptop acts\
+------------------------------------------------\
+Every cycle:\
+1.  screenshot 
+\f1 \uc0\u8594 
+\f0  Groq vision model\
+2.  Groq returns *Python* code (uses computer.* API)\
+3.  We execute immediately (auto-run is OFF by default)\
+------------------------------------------------\
+\
+\
+\
+Usage:\
+  python3 groq_home_ai.py  --prompt  "book tomorrow 10 am nail-client Anna"\
+"""\
+\
+\
+\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\pardirnatural\partightenfactor0
+
+\f2\fs22 \cf2 \CocoaLigature0 #!/usr/bin/env python3\
+import os, subprocess, time, argparse\
+from groq import Groq\
+\
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))\
+MODEL = "llama-3.1-8b-instant"          # text-only, cheap, fast\
+\
+def execute(code):\
+    print("----- AI wants to run -----\\n", code.strip(), "\\n---------------------------")\
+    if args.dry:\
+        return\
+    if not args.yes and input("Execute? [Y/n] ").lower() == "n":\
+        return\
+    # Remove indentation from the code\
+    lines = [line.strip() for line in code.split('\\n')]\
+    clean_code = '\\n'.join(lines)\
+    exec(clean_code, \{"subprocess": subprocess, "time": time, "__builtins__": __builtins__\})\
+\
+\
+\
+\
+def ask_groq(user_text):\
+    mac_template = f"""You are a macOS home-agent. Reply ONLY with this exact b$\
+    ```python\
+    import subprocess, time\
+    subprocess.run(["open", "-a", "Calculator"])\
+    time.sleep(2)\
+\
+    <<<ACTION>>>          # e.g. subprocess.run(["screencapture", "-x", "~/Desk$\
+    User request: \{user_text\}"""\
+    return client.chat.completions.create(model=MODEL, messages=[\{"role": "user$\
+\
+def main():\
+    global args\
+    parser = argparse.ArgumentParser()\
+    parser.add_argument("--prompt", required=True, help="What you want done")\
+    parser.add_argument("--yes", action="store_true", help="Skip human approval")\
+    parser.add_argument("--dry", action="store_true", help="Print only, never run")\
+    args = parser.parse_args()\
+\
+    code = ask_groq(args.prompt)\
+    execute(code)\
+\
+if __name__ == "__main__":\
+    main()\
+\
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 \CocoaLigature1 \
+\
+Cntrl-o enter cntrl-x \
+\
+\
+\
+\
+# 1.  load the key (if you haven\'92t already)\
+source ~/.zshrc\
+\
+# 2.  dry-run test (safe \'96 only prints, no clicks)\
+python3 ~/groq_agent/groq_home_ai.py \\\
+  --dry \\\
+  --prompt "Open Calculator and take a screenshot."\
+\
+\
+\
+\
+\
+}

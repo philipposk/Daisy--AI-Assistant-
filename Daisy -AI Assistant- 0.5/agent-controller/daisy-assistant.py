@@ -1,0 +1,2285 @@
+#!/usr/bin/env python3
+"""
+Daisy - Personal AI Assistant
+Features:
+- Natural woman's voice (OpenAI TTS)
+- LLM-powered conversations (OpenAI GPT-4 or Anthropic Claude)
+- Voice recognition for two-way conversation
+- Context memory and personalization
+"""
+
+import json
+import os
+import subprocess
+import time
+import re
+import base64
+import requests
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+import threading
+from dataclasses import dataclass, asdict
+from datetime import datetime
+import sys
+
+# Core dependencies
+try:
+    import speech_recognition as sr
+    from openai import OpenAI
+except ImportError:
+    print("❌ Missing required packages. Installing...")
+    import sys
+    try:
+        # Try installing without pyaudio first (it requires system library portaudio)
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "openai", "speechrecognition", "pydub"], 
+                            stderr=subprocess.DEVNULL)
+        print("✅ Core packages installed")
+    except:
+        # If that fails, install everything
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "openai", "speechrecognition", "pydub"])
+    try:
+        # Try installing pyaudio separately (may fail if portaudio not installed)
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "pyaudio"], 
+                            stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        print("✅ pyaudio installed")
+    except:
+        print("⚠️  pyaudio not installed (requires portaudio). Voice input will use fallback method.")
+        print("   To install: brew install portaudio, then: pip install pyaudio")
+    import speech_recognition as sr
+    from openai import OpenAI
+
+try:
+    import pyaudio
+    PYAUDIO_AVAILABLE = True
+except ImportError:
+    PYAUDIO_AVAILABLE = False
+    # pyaudio not required - speech_recognition can work without it
+
+import io
+
+# Groq SDK import (PROVEN WORKING - matches Praiser)
+try:
+    from groq import Groq
+    GROQ_AVAILABLE = True
+except ImportError:
+    GROQ_AVAILABLE = False
+    Groq = None
+
+@dataclass
+class ConversationMessage:
+    """Represents a message in the conversation"""
+    role: str  # 'user', 'assistant', 'system'
+    content: str
+    timestamp: str
+
+class DaisyAssistant:
+    """Personal AI Assistant with voice and conversation capabilities"""
+    
+    def __init__(self, config_path: Optional[Path] = None):
+        self.config_path = config_path or Path.home() / ".daisy" / "config.json"
+        self.config = self.load_config()
+        self.setup_directories()
+        
+        # Initialize OpenAI client
+        openai_api_key = os.getenv("OPENAI_API_KEY") or self.config.get("openai_api_key")
+        self.client = None
+        if openai_api_key:
+            try:
+                self.client = OpenAI(api_key=openai_api_key)
+                print("✅ OpenAI client initialized")
+            except Exception as e:
+                print(f"⚠️  OpenAI client error: {e}")
+        else:
+            print("⚠️  OpenAI API key not found")
+        
+        # Initialize Groq client (PROVEN WORKING APPROACH - same as Praiser)
+        groq_api_key = os.getenv("GROQ_API_KEY") or self.config.get("groq_api_key")
+        self.groq_client = None
+        self.groq_models_cache = None
+        self.groq_models_cache_time = 0
+        self.GROQ_CACHE_TTL = 3600  # 1 hour cache (same as Praiser)
+        
+        # Groq working model cache (remember which model works)
+        # Try to load from config if available (persists across restarts)
+        self.groq_working_model = self.config.get("groq_working_model")
+        saved_check_time = self.config.get("groq_model_check_time", 0)
+        # Only use saved time if it's recent (within last hour)
+        now = time.time()
+        if saved_check_time and (now - saved_check_time < 3600):
+            self.groq_model_check_time = saved_check_time
+        else:
+            self.groq_model_check_time = 0
+        self.GROQ_MODEL_CHECK_INTERVAL = 3600  # Re-check working model every hour
+        
+        if GROQ_AVAILABLE and groq_api_key:
+            try:
+                self.groq_client = Groq(api_key=groq_api_key)
+                print("✅ Groq client initialized")
+            except Exception as e:
+                print(f"⚠️  Groq client error: {e}")
+        elif GROQ_AVAILABLE and not groq_api_key:
+            print("⚠️  Groq API key not found (optional fallback)")
+        
+        # Conversation history with smart context management (inspired by Horizons OmniChat)
+        self.conversation_history: List[ConversationMessage] = []
+        self.max_history = 50  # Keep last 50 messages
+        self.max_context_tokens = 4000  # Approximate token limit for context window
+        self.context_compression_enabled = self.config.get("context_compression", True)  # Enable smart context compression
+        
+        # Voice recognition
+        self.recognizer = sr.Recognizer()
+        try:
+            self.microphone = sr.Microphone()
+            print("✅ Microphone available")
+        except Exception as e:
+            print(f"⚠️  Microphone not available: {e}")
+            self.microphone = None
+            if not PYAUDIO_AVAILABLE:
+                print("   Note: Install portaudio for full voice support: brew install portaudio")
+        self.is_listening = False
+        
+        # Audio playback control (for interruption)
+        self.current_audio_process = None
+        self.is_speaking = False
+        
+        # Interrupt handling (event-based for better responsiveness)
+        self.interrupt_event = threading.Event()
+        self.interrupt_detected = False
+        
+        # Quota check caching (avoid checking every request)
+        self.openai_quota_exceeded = False
+        self.quota_check_time = 0
+        self.QUOTA_CHECK_INTERVAL = 3600  # Check once per hour (3600 seconds)
+        
+        # Interrupt cooldown to prevent immediate re-listening after interrupt
+        self.interrupt_time = 0
+        self.INTERRUPT_COOLDOWN = 3.0  # Ignore audio for 3 seconds after interrupt
+        self.last_response_time = 0  # Track when we last responded
+        self.RESPONSE_COOLDOWN = 5.0  # Ignore similar inputs for 5 seconds after responding
+        
+        # Lock to prevent overlapping responses
+        self.response_lock = threading.Lock()
+        self.is_responding = False  # Flag to prevent multiple simultaneous responses
+        
+        # TTS engine selection
+        self.tts_engine = self.config.get("tts_engine", "piper")  # piper, coqui, openai, say
+        self.piper_available = self._check_piper_available()
+        self.coqui_available = self._check_coqui_available()
+        
+        # Initialize system prompt (will be enhanced with language detection)
+        # Enhanced prompt inspired by Horizons OmniChat's approach - optimized for voice assistants
+        self.base_system_prompt = self.config.get(
+            "system_prompt",
+            """You are Daisy, a friendly and helpful personal AI voice assistant. 
+
+IMPORTANT VOICE ASSISTANT GUIDELINES:
+- Keep responses SHORT and CONVERSATIONAL (2-3 sentences max for most responses)
+- Speak naturally as if having a real conversation
+- Avoid long explanations unless specifically asked
+- Use contractions (I'm, you're, it's) for natural speech
+- Be concise but warm and friendly
+- If asked a complex question, give a brief answer first, then offer to elaborate
+- Use simple, clear language suitable for spoken conversation
+- Avoid reading lists or long enumerations - summarize instead
+- Respond as if speaking, not writing
+
+PERSONALITY:
+- Warm, professional, and slightly conversational
+- Helpful but not overly verbose
+- Proactive in offering assistance
+- Natural and human-like in conversation flow
+
+Remember: You're a VOICE assistant - people are LISTENING, not reading. Keep it brief and natural."""
+        )
+        
+        # Language detection and TTS model selection
+        self.current_language = "en"  # Track current language
+        self.greek_piper_model = self.config.get("greek_piper_model", "el_GR-rapunzelina-low")
+        
+        # Initialize conversation (will update with language detection)
+        self.system_prompt = self.base_system_prompt
+        self.add_system_message(self.system_prompt)
+        
+        print("🌟 Daisy is ready!")
+        print(f"🧠 LLM Model: {self.config.get('llm_model', 'gpt-3.5-turbo')}")
+        
+        # Show TTS engine status
+        tts_engine = self.config.get('tts_engine', 'piper')
+        print(f"🔊 TTS Engine: {tts_engine}")
+        if tts_engine == "piper":
+            if self.piper_available:
+                print(f"   ✅ Piper TTS: Available (fast, high-quality open-source)")
+            else:
+                print(f"   ⚠️  Piper TTS: Not installed (install: brew install piper-tts)")
+        elif tts_engine == "coqui":
+            if self.coqui_available:
+                print(f"   ✅ Coqui TTS: Available (high-quality neural TTS)")
+            else:
+                print(f"   ⚠️  Coqui TTS: Not installed (install: pip install TTS)")
+        elif tts_engine == "openai":
+            print(f"   ✅ OpenAI TTS: Available (cloud-based, high quality)")
+        else:
+            print(f"   ✅ macOS say: Using {self.config.get('say_voice', 'Samantha')} voice")
+        
+        # Show speech recognition status
+        if self.groq_client:
+            print(f"🎤 Speech Recognition: Groq Whisper (whisper-large-v3-turbo)")
+            print(f"   ✅ Excellent at understanding whispers and quiet speech")
+            if self.groq_working_model:
+                print(f"   💬 LLM Fallback: Groq {self.groq_working_model} (cached)")
+        else:
+            print(f"⚠️  Speech Recognition: Groq not available (using OpenAI/Google fallback)")
+            print(f"   💡 Set GROQ_API_KEY for better speech recognition (like Praiser)")
+    
+    def load_config(self) -> Dict:
+        """Load configuration"""
+        if self.config_path.exists():
+            with open(self.config_path, 'r') as f:
+                return json.load(f)
+        return self.create_default_config()
+    
+    def create_default_config(self) -> Dict:
+        """Create default configuration"""
+        config = {
+            "openai_api_key": "",
+            "groq_api_key": "",  # Required for Groq Whisper (better speech recognition)
+            "llm_model": "gpt-3.5-turbo",  # Default to gpt-3.5-turbo (more accessible than gpt-4)
+            "tts_engine": "piper",  # piper (fast, open-source), coqui (high-quality), openai (cloud), say (macOS fallback)
+            "voice": "shimmer",  # For OpenAI TTS: shimmer is more expressive and human-like (nova is also good)
+            "voice_speed": 0.95,  # Slightly slower for more natural speech (0.9-1.0 range)
+            "tts_model": "tts-1-hd",  # For OpenAI TTS: Higher quality for more human-like voice
+            "piper_model": "en_US-lessac-medium",  # Piper TTS model - medium balances quality/speed. Options: -medium (balanced), -high (better quality), -low (fastest)
+            "coqui_model": "tts_models/en/ljspeech/tacotron2-DDC",  # Coqui TTS model
+            "say_voice": "Samantha",  # macOS say command voice (Samantha, Karen, etc.)
+            "system_prompt": """You are Daisy, a friendly and helpful personal AI assistant. 
+You have a warm, professional, and slightly conversational personality.
+You help with tasks, answer questions, and engage in natural conversations.
+Keep responses concise but friendly. Use natural speech patterns with pauses, 
+variations in tone, and conversational flow. Speak like a real person would, 
+with natural rhythm and emphasis.""",
+            "conversation_mode": "continuous",
+            "wake_word": "daisy",
+            "auto_listen": True,
+            "save_conversations": True,
+            "max_response_tokens": 200,
+            "max_voice_response_length": 500,
+            "context_compression": True,
+            "voice_optimization": True,
+            "retry_attempts": 3,
+            "retry_delay": 1.0
+        }
+        self.save_config(config)
+        return config
+    
+    def save_config(self, config: Optional[Dict] = None):
+        """Save configuration"""
+        if config:
+            self.config = config
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.config_path, 'w') as f:
+            json.dump(self.config, f, indent=2)
+    
+    def setup_directories(self):
+        """Create necessary directories"""
+        dirs = [
+            Path.home() / ".daisy",
+            Path.home() / ".daisy" / "conversations",
+            Path.home() / ".daisy" / "audio",
+            Path.home() / ".daisy" / "logs",
+        ]
+        for d in dirs:
+            d.mkdir(parents=True, exist_ok=True)
+    
+    def add_message(self, role: str, content: str):
+        """Add a message to conversation history"""
+        message = ConversationMessage(
+            role=role,
+            content=content,
+            timestamp=datetime.now().isoformat()
+        )
+        self.conversation_history.append(message)
+        
+        # Keep history within limit
+        if len(self.conversation_history) > self.max_history:
+            # Keep system message, remove oldest non-system messages
+            system_msgs = [m for m in self.conversation_history if m.role == 'system']
+            other_msgs = [m for m in self.conversation_history if m.role != 'system']
+            self.conversation_history = system_msgs + other_msgs[-self.max_history+1:]
+    
+    def add_system_message(self, content: str):
+        """Add system message"""
+        self.add_message('system', content)
+    
+    def get_conversation_context(self) -> List[Dict]:
+        """Get conversation context for LLM with smart compression (inspired by Horizons OmniChat)"""
+        messages = [
+            {"role": msg.role, "content": msg.content}
+            for msg in self.conversation_history
+        ]
+        
+        # Smart context compression: keep system message, recent messages, and summarize older ones
+        if self.context_compression_enabled and len(messages) > 20:
+            # Always keep system message
+            system_msgs = [m for m in messages if m["role"] == "system"]
+            other_msgs = [m for m in messages if m["role"] != "system"]
+            
+            # Keep last 15 messages (recent context)
+            recent_msgs = other_msgs[-15:] if len(other_msgs) > 15 else other_msgs
+            
+            # Summarize older messages if needed
+            if len(other_msgs) > 15:
+                older_msgs = other_msgs[:-15]
+                if older_msgs:
+                    # Create a summary of older conversation
+                    summary = self._summarize_conversation(older_msgs)
+                    if summary:
+                        summary_msg = {"role": "system", "content": f"Previous conversation summary: {summary}"}
+                        messages = system_msgs + [summary_msg] + recent_msgs
+                    else:
+                        messages = system_msgs + recent_msgs
+                else:
+                    messages = system_msgs + recent_msgs
+            else:
+                messages = system_msgs + other_msgs
+        
+        return messages
+    
+    def _summarize_conversation(self, messages: List[Dict]) -> Optional[str]:
+        """Summarize older conversation messages to save context"""
+        if not messages or len(messages) < 3:
+            return None
+        
+        try:
+            # Create a simple summary prompt
+            conversation_text = "\n".join([
+                f"{msg['role']}: {msg['content'][:200]}"  # Truncate long messages
+                for msg in messages[-10:]  # Only summarize last 10 older messages
+            ])
+            
+            summary_prompt = f"Summarize this conversation in 2-3 sentences:\n\n{conversation_text}"
+            
+            # Try to get a quick summary (use Groq if available for speed)
+            if self.groq_client:
+                try:
+                    response = self.groq_client.chat.completions.create(
+                        model="llama-3.1-8b-instant",  # Fast model for summarization
+                        messages=[{"role": "user", "content": summary_prompt}],
+                        temperature=0.3,
+                        max_tokens=100
+                    )
+                    return response.choices[0].message.content.strip()
+                except:
+                    pass
+            
+            # Fallback: simple extraction of key topics
+            user_messages = [m["content"][:100] for m in messages if m["role"] == "user"]
+            if user_messages:
+                return f"Discussed: {', '.join(user_messages[:3])}"
+            
+            return None
+        except Exception as e:
+            print(f"⚠️  Summarization error: {e}")
+            return None
+    
+    def fetch_groq_models(self) -> List[str]:
+        """
+        Fetch models dynamically from Groq API (PROVEN - matches Praiser implementation)
+        No hardcoded models - API key determines what's available
+        """
+        # Check cache first (1 hour TTL like Praiser)
+        now = time.time()
+        if (self.groq_models_cache and 
+            now - self.groq_models_cache_time < self.GROQ_CACHE_TTL):
+            return self.groq_models_cache
+        
+        groq_api_key = os.getenv("GROQ_API_KEY") or self.config.get("groq_api_key")
+        if not groq_api_key:
+            return []
+        
+        try:
+            # PROVEN WORKING: Direct HTTP call (same as Praiser)
+            response = requests.get(
+                "https://api.groq.com/openai/v1/models",
+                headers={
+                    "Authorization": f"Bearer {groq_api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=10
+            )
+            
+            if not response.ok:
+                raise Exception(f"Groq API error: {response.status_code}")
+            
+            data = response.json()
+            all_models = [model["id"] for model in data.get("data", [])]
+            
+            # Filter out non-conversation models (TTS, guard, whisper, compound)
+            exclude_patterns = ["tts", "whisper", "guard", "compound", "decommissioned"]
+            conversation_models = [
+                m for m in all_models
+                if not any(pattern in m.lower() for pattern in exclude_patterns)
+            ]
+            
+            # Smart sorting: Larger/newer models first (no hardcoded list)
+            def model_priority(model: str) -> tuple:
+                """Sort by size, version, type - dynamically"""
+                m = model.lower()
+                # Size (larger = better)
+                size = 0
+                for val in [120, 70, 32, 20, 17, 8]:
+                    if str(val) in m or f"{val}b" in m:
+                        size = val
+                        break
+                # Version (newer = better)
+                version = 3 if "3.3" in m else (2 if "3.1" in m else (1 if "3" in m else 0))
+                # Type (versatile > instant > others)
+                type_score = 2 if "versatile" in m else (1 if "instant" in m else 0)
+                return (-size, -version, -type_score)
+            
+            sorted_models = sorted(conversation_models, key=model_priority)
+            
+            # Cache result
+            self.groq_models_cache = sorted_models
+            self.groq_models_cache_time = now
+            
+            print(f"✅ Fetched {len(sorted_models)} Groq models dynamically")
+            if sorted_models:
+                print(f"   Top model: {sorted_models[0]}")
+            return sorted_models
+            
+        except Exception as e:
+            print(f"⚠️  Failed to fetch Groq models: {e}")
+            return []
+    
+    def get_groq_response(self, messages: List[Dict]) -> str:
+        """Get response from Groq - use cached working model (re-check every hour)"""
+        if not self.groq_client:
+            return "I'm sorry, Groq is not available."
+        
+        # Check if we have a cached working model
+        now = time.time()
+        use_cached_model = False
+        
+        if self.groq_working_model:
+            # Check if cache is still valid (1 hour)
+            # Handle case where check_time might be 0 or None
+            check_time = self.groq_model_check_time or 0
+            if check_time > 0 and (now - check_time < self.GROQ_MODEL_CHECK_INTERVAL):
+                # Use cached working model directly - no searching!
+                use_cached_model = True
+                print(f"💡 Using cached Groq model: {self.groq_working_model}")
+                
+                # Try the cached model first
+                try:
+                    # Optimize for voice: shorter responses
+                    max_tokens = self.config.get("max_response_tokens", 200)
+                    response = self.groq_client.chat.completions.create(
+                        model=self.groq_working_model,
+                        messages=messages,
+                        temperature=0.7,
+                        max_tokens=max_tokens
+                    )
+                    
+                    assistant_message = response.choices[0].message.content
+                    # Handle None or empty response
+                    if not assistant_message or assistant_message.strip() == "":
+                        assistant_message = "I'm sorry, I couldn't generate a response. Please try again."
+                    elif not isinstance(assistant_message, str):
+                        assistant_message = str(assistant_message)
+                    
+                    # Update cache time
+                    self.groq_model_check_time = time.time()
+                    self.config["groq_model_check_time"] = self.groq_model_check_time
+                    self.save_config()
+                    
+                    # Optimize response for voice
+                    assistant_message = self._optimize_response_for_voice(assistant_message)
+                    
+                    self.add_message('assistant', assistant_message)
+                    print(f"✅ Response from Groq ({self.groq_working_model})")
+                    return assistant_message
+                except Exception as e:
+                    # Cached model failed - clear cache and search for new one
+                    error_str = str(e)
+                    if any(x in error_str.lower() for x in ["404", "model_not_found", "decommissioned"]):
+                        print(f"⚠️  Cached model {self.groq_working_model} no longer available - searching for new one...")
+                    else:
+                        print(f"⚠️  Cached model {self.groq_working_model} failed - searching for new one...")
+                    self.groq_working_model = None
+                    use_cached_model = False
+        
+        # No cached model or cache expired - fetch and try models
+        if not use_cached_model:
+            # Fetch models dynamically (no hardcoding)
+            models = self.fetch_groq_models()
+            if not models:
+                return "I'm sorry, no Groq models are available."
+            
+            last_error = None
+            
+            # Try each model until one works
+            for model in models:
+                try:
+                    print(f"🔄 Trying Groq model: {model}")
+                    
+                    # PROVEN WORKING: Use Groq SDK for chat (same as Praiser)
+                    # Optimize for voice: shorter responses
+                    max_tokens = self.config.get("max_response_tokens", 200)
+                    response = self.groq_client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        temperature=0.7,
+                        max_tokens=max_tokens
+                    )
+                    
+                    assistant_message = response.choices[0].message.content
+                    # Handle None or empty response
+                    if not assistant_message or assistant_message.strip() == "":
+                        assistant_message = "I'm sorry, I couldn't generate a response. Please try again."
+                    elif not isinstance(assistant_message, str):
+                        assistant_message = str(assistant_message)
+                    
+                    # Cache this working model for 1 hour (save to config)
+                    self.groq_working_model = model
+                    self.groq_model_check_time = time.time()
+                    self.config["groq_working_model"] = model
+                    self.config["groq_model_check_time"] = self.groq_model_check_time
+                    self.save_config()
+                    
+                    # Optimize response for voice
+                    assistant_message = self._optimize_response_for_voice(assistant_message)
+                    
+                    self.add_message('assistant', assistant_message)
+                    print(f"✅ Response from Groq ({model}) - cached for 1 hour")
+                    return assistant_message
+                        
+                except Exception as e:
+                    last_error = e
+                    error_str = str(e)
+                    
+                    # Skip model if not found or decommissioned
+                    if any(x in error_str.lower() for x in ["404", "model_not_found", "decommissioned"]):
+                        print(f"⚠️  Model {model} not available, trying next...")
+                        continue
+                    # Try next on rate limit
+                    if any(x in error_str.lower() for x in ["429", "rate_limit", "503", "over capacity"]):
+                        print(f"⚠️  Model {model} rate limited, trying next...")
+                        continue
+                    # Other errors - still try next
+                    print(f"⚠️  Model {model} error, trying next...")
+                    continue
+            
+            # All models failed - clear working model cache
+            self.groq_working_model = None
+            self.groq_model_check_time = 0
+            if "groq_working_model" in self.config:
+                del self.config["groq_working_model"]
+            if "groq_model_check_time" in self.config:
+                del self.config["groq_model_check_time"]
+            self.save_config()
+            
+            error_msg = f"I'm sorry, all Groq models failed. Last error: {str(last_error)[:100] if last_error else 'Unknown'}"
+            self.add_message('assistant', error_msg)
+            return error_msg
+    
+    def stop_speaking(self):
+        """Immediately stop Daisy from speaking (interrupt) - ULTRA AGGRESSIVE VERSION"""
+        # Set flags FIRST (before any delays) - CRITICAL
+        self.is_speaking = False
+        self.interrupt_detected = True
+        self.interrupt_event.set()  # Signal interrupt event
+        self.interrupt_time = time.time()  # Record interrupt time for cooldown
+        print("\n🔇 [STOPPING SPEECH IMMEDIATELY...]")
+        
+        # Kill the current audio process FIRST (most important) - ULTRA AGGRESSIVE
+        if self.current_audio_process:
+            try:
+                # Force kill immediately (no terminate, just kill)
+                self.current_audio_process.kill()
+                try:
+                    self.current_audio_process.wait(timeout=0.02)  # Even shorter timeout
+                except:
+                    pass
+            except:
+                pass
+        
+        # Kill ALL say processes (force kill with -9 signal) - ULTRA AGGRESSIVE
+        for _ in range(10):  # Try 10 times to be absolutely sure
+            try:
+                subprocess.run(["pkill", "-9", "say"], check=False,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.05)
+            except:
+                pass
+        
+        # Kill afplay processes too (force kill) - ULTRA AGGRESSIVE
+        for _ in range(10):
+            try:
+                subprocess.run(["pkill", "-9", "afplay"], check=False, 
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.05)
+            except:
+                pass
+        
+        # Also kill piper processes if any
+        for _ in range(5):
+            try:
+                subprocess.run(["pkill", "-9", "piper"], check=False,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.05)
+            except:
+                pass
+        
+        # Kill any Python processes that might be running TTS
+        try:
+            subprocess.run(["pkill", "-9", "-f", "piper"], check=False,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.05)
+        except:
+            pass
+        
+        self.current_audio_process = None
+        print("✅ [SPEECH STOPPED]")
+    
+    def _check_piper_available(self) -> bool:
+        """Check if Piper TTS is available"""
+        try:
+            # Try importing directly (more reliable)
+            try:
+                from piper import PiperVoice
+                print("✅ Piper TTS: Direct import successful")
+                return True
+            except ImportError as e:
+                print(f"⚠️  Piper TTS: Direct import failed: {e}")
+                pass
+            
+            # Fallback: check if piper command-line tool is available
+            result = subprocess.run(
+                ["which", "piper"],
+                capture_output=True,
+                check=False
+            )
+            if result.returncode == 0:
+                print("✅ Piper TTS: Command-line tool found")
+                return True
+            
+            # Also check if piper Python package is available via subprocess
+            result = subprocess.run(
+                ["python3", "-c", "import piper"],
+                capture_output=True,
+                check=False
+            )
+            if result.returncode == 0:
+                print("✅ Piper TTS: Subprocess import successful")
+                return True
+            else:
+                stderr = result.stderr.decode() if result.stderr else ""
+                print(f"⚠️  Piper TTS: Subprocess import failed: {stderr[:100]}")
+            return False
+        except Exception as e:
+            print(f"⚠️  Piper TTS: Check exception: {e}")
+            return False
+    
+    def _check_coqui_available(self) -> bool:
+        """Check if Coqui TTS is available"""
+        try:
+            result = subprocess.run(
+                ["python3", "-c", "import TTS"],
+                capture_output=True,
+                check=False
+            )
+            return result.returncode == 0
+        except:
+            return False
+    
+    def _piper_tts(self, text: str) -> Optional[str]:
+        """Generate speech using Piper TTS (fast, high-quality open-source TTS)"""
+        try:
+            audio_dir = Path.home() / ".daisy" / "audio"
+            audio_file = audio_dir / f"daisy_piper_{int(time.time())}.wav"
+            
+            # Detect language and use appropriate model
+            detected_lang = self.detect_language(text)
+            if detected_lang == "el":
+                # Use Greek model
+                model_name = self.config.get("greek_piper_model", "el_GR-rapunzelina-low")
+                print(f"🇬🇷 Using Greek Piper TTS model: {model_name}")
+            else:
+                # Use English model
+                model_name = self.config.get("piper_model", "en_US-lessac-medium")
+                print(f"🇺🇸 Using English Piper TTS model: {model_name}")
+            
+            # Try Python piper package first (easier to use)
+            try:
+                from piper import PiperVoice
+                
+                # Try to find model in common locations
+                possible_model_paths = [
+                    (Path.home() / ".local" / "share" / "piper" / "voices" / f"{model_name}.onnx", 
+                     Path.home() / ".local" / "share" / "piper" / "voices" / f"{model_name}.onnx.json"),
+                    (Path.home() / ".local" / "share" / "piper" / "voices" / f"{model_name}" / "model.onnx",
+                     Path.home() / ".local" / "share" / "piper" / "voices" / f"{model_name}" / "config.json"),
+                    (Path("/usr/local/share/piper/voices") / f"{model_name}.onnx",
+                     Path("/usr/local/share/piper/voices") / f"{model_name}.onnx.json"),
+                    (Path("/opt/homebrew/share/piper/voices") / f"{model_name}.onnx",
+                     Path("/opt/homebrew/share/piper/voices") / f"{model_name}.onnx.json"),
+                ]
+                
+                model_path = None
+                config_path = None
+                for model, config in possible_model_paths:
+                    if model.exists():
+                        model_path = str(model)
+                        if config.exists():
+                            config_path = str(config)
+                        else:
+                            # Config might be in same directory with .json extension
+                            config_path = str(model) + ".json"
+                        break
+                
+                if model_path:
+                    # Use Python package
+                    voice = PiperVoice.load(model_path, config_path=config_path if Path(config_path).exists() else None)
+                    # Synthesize returns iterable of AudioChunk
+                    audio_chunks = voice.synthesize(text)
+                    
+                    # Collect all audio data first
+                    all_audio_data = b""
+                    sample_rate = None
+                    sample_width = None
+                    sample_channels = None
+                    
+                    for audio_chunk in audio_chunks:
+                        # Get audio data and metadata from first chunk
+                        if sample_rate is None:
+                            sample_rate = audio_chunk.sample_rate
+                            sample_width = audio_chunk.sample_width
+                            sample_channels = audio_chunk.sample_channels
+                        # AudioChunk has audio_int16_bytes attribute (not audio_bytes)
+                        all_audio_data += audio_chunk.audio_int16_bytes
+                    
+                    # Write proper WAV file with headers
+                    import wave
+                    import struct
+                    
+                    with wave.open(str(audio_file), 'wb') as wav_file:
+                        wav_file.setnchannels(sample_channels or 1)
+                        wav_file.setsampwidth(sample_width or 2)
+                        wav_file.setframerate(sample_rate or 22050)
+                        wav_file.writeframes(all_audio_data)
+                    
+                    if audio_file.exists():
+                        return str(audio_file)
+            except ImportError:
+                pass  # Python package not available, try command-line
+            except Exception as e:
+                print(f"⚠️  Piper TTS Python package error: {e}")
+                import traceback
+                traceback.print_exc()
+            
+            # Fallback: Try piper command-line tool
+            # Try to find model in common locations
+            possible_model_paths = [
+                Path.home() / ".local" / "share" / "piper" / "voices" / f"{model_name}.onnx",
+                Path.home() / ".local" / "share" / "piper" / "voices" / f"{model_name}" / "model.onnx",
+                Path("/usr/local/share/piper/voices") / f"{model_name}.onnx",
+                Path("/opt/homebrew/share/piper/voices") / f"{model_name}.onnx",
+            ]
+            
+            model_path = None
+            for path in possible_model_paths:
+                if path.exists():
+                    model_path = str(path)
+                    break
+            
+            # If no model file found, try using just the model name (piper might find it)
+            if not model_path:
+                model_path = model_name
+            
+            # Try piper command with stdin
+            process = subprocess.Popen(
+                ["piper", "--model", model_path, "--output_file", str(audio_file)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            stdout, stderr = process.communicate(input=text, timeout=30)
+            
+            if process.returncode == 0 and audio_file.exists():
+                return str(audio_file)
+            else:
+                if stderr:
+                    print(f"⚠️  Piper TTS error: {stderr[:200]}")
+                return None
+                
+        except subprocess.TimeoutExpired:
+            print("⚠️  Piper TTS timeout")
+            return None
+        except FileNotFoundError:
+            print("⚠️  Piper TTS not found. Install with: pip3 install piper-tts")
+            return None
+        except Exception as e:
+            print(f"⚠️  Piper TTS error: {e}")
+            return None
+    
+    def _coqui_tts(self, text: str) -> Optional[str]:
+        """Generate speech using Coqui TTS (high-quality neural TTS)"""
+        try:
+            from TTS.api import TTS
+            
+            audio_dir = Path.home() / ".daisy" / "audio"
+            audio_file = audio_dir / f"daisy_coqui_{int(time.time())}.wav"
+            
+            # Use a good quality female voice
+            # tts_models/en/ljspeech/tacotron2-DDC is a good option
+            model_name = self.config.get("coqui_model", "tts_models/en/ljspeech/tacotron2-DDC")
+            
+            tts = TTS(model_name=model_name)
+            tts.tts_to_file(text=text, file_path=str(audio_file))
+            
+            if audio_file.exists():
+                return str(audio_file)
+            return None
+            
+        except Exception as e:
+            print(f"⚠️  Coqui TTS error: {e}")
+            return None
+    
+    def _process_text_for_natural_speech(self, text: str) -> str:
+        """Minimal text cleaning - let TTS handle prosody naturally (like ChatGPT Voice)"""
+        # Handle None or non-string input
+        if text is None:
+            return "I'm sorry, I couldn't generate a response."
+        if not isinstance(text, str):
+            text = str(text)
+        if not text.strip():
+            return "I'm sorry, I couldn't understand that."
+        
+        # Remove emojis - TTS engines try to read them as words (e.g., "smiley face")
+        emoji_pattern = re.compile(
+            "["
+            "\U0001F600-\U0001F64F"  # emoticons
+            "\U0001F300-\U0001F5FF"  # symbols & pictographs
+            "\U0001F680-\U0001F6FF"  # transport & map symbols
+            "\U0001F1E0-\U0001F1FF"  # flags (iOS)
+            "\U00002702-\U000027B0"  # dingbats
+            "\U000024C2-\U0001F251"  # enclosed characters
+            "\U0001F900-\U0001F9FF"  # supplemental symbols
+            "\U0001FA00-\U0001FA6F"  # chess symbols
+            "\U0001FA70-\U0001FAFF"  # symbols and pictographs extended-A
+            "\U00002600-\U000026FF"  # miscellaneous symbols
+            "\U00002700-\U000027BF"  # dingbats
+            "]+",
+            flags=re.UNICODE
+        )
+        text = emoji_pattern.sub('', text)  # Remove all emojis
+        
+        # Remove markdown tables (lines with pipes)
+        lines = text.split('\n')
+        cleaned_lines = []
+        for line in lines:
+            # Skip markdown table rows (lines with multiple pipes)
+            if line.count('|') >= 2:
+                continue
+            # Skip markdown table separators (lines with dashes and pipes)
+            if re.match(r'^[\s\|:\-]+$', line):
+                continue
+            cleaned_lines.append(line)
+        text = '\n'.join(cleaned_lines)
+        
+        # Remove markdown formatting
+        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)  # Remove **bold**
+        text = re.sub(r'\*(.*?)\*', r'\1', text)  # Remove *italic*
+        text = re.sub(r'__(.*?)__', r'\1', text)  # Remove __bold__
+        text = re.sub(r'_(.*?)_', r'\1', text)  # Remove _italic_
+        text = re.sub(r'~~(.*?)~~', r'\1', text)  # Remove ~~strikethrough~~
+        text = re.sub(r'`(.*?)`', r'\1', text)  # Remove `code`
+        text = re.sub(r'```[\s\S]*?```', '', text)  # Remove code blocks
+        text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)  # Remove # headers
+        
+        # Remove special characters that TTS tries to read as words
+        text = re.sub(r'[*#_~`|]', '', text)  # Remove *, #, _, ~, `, |
+        
+        # Remove bullet points and list markers
+        text = re.sub(r'^\s*[-*+]\s+', '', text, flags=re.MULTILINE)  # Remove - * + bullets
+        text = re.sub(r'^\s*\d+\.\s+', '', text, flags=re.MULTILINE)  # Remove numbered lists
+        
+        # Clean whitespace (but preserve natural spacing - don't manipulate punctuation)
+        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)  # Remove multiple blank lines
+        text = re.sub(r'[ \t]+', ' ', text)  # Multiple spaces/tabs to single space
+        
+        # DON'T add pauses or manipulate punctuation - let TTS handle prosody naturally!
+        # Modern TTS models (Piper, OpenAI TTS) handle prosody much better than regex manipulation
+        
+        return text.strip()
+    
+    def text_to_speech(self, text: str) -> Optional[bytes]:
+        """Convert text to speech using best available TTS engine (interruptible)"""
+        # Stop any currently playing audio FIRST
+        if self.is_speaking:
+            self.stop_speaking()
+            time.sleep(0.1)  # Brief pause to ensure processes are killed
+        
+        # Process text for more natural speech patterns
+        processed_text = self._process_text_for_natural_speech(text)
+        
+        # Determine which TTS engine to use
+        tts_engine = self.config.get("tts_engine", "piper")
+        print(f"🔊 TTS Engine selected: {tts_engine} (piper_available: {self.piper_available})")
+        
+        # Try Piper TTS first (fast, high-quality, open-source)
+        if tts_engine == "piper":
+            if self.piper_available:
+                print("🔊 Using Piper TTS...")
+                audio_file = self._piper_tts(processed_text)
+                if audio_file:
+                    print(f"✅ Piper TTS generated audio: {audio_file}")
+                    return self._play_audio_file(audio_file)
+                else:
+                    print("⚠️  Piper TTS failed, trying fallback...")
+            else:
+                print("⚠️  Piper TTS not available, trying fallback...")
+        
+        # Try Coqui TTS (high-quality neural TTS)
+        if (tts_engine == "coqui" or (tts_engine == "piper" and not self.piper_available)) and self.coqui_available:
+            audio_file = self._coqui_tts(processed_text)
+            if audio_file:
+                return self._play_audio_file(audio_file)
+            else:
+                print("⚠️  Coqui TTS failed, trying fallback...")
+        
+        # Try OpenAI TTS (only if explicitly set or if no other options available)
+        if tts_engine == "openai":
+            try:
+                # Use shimmer voice for more natural, expressive sound (more human-like)
+                voice = self.config.get("voice", "shimmer")  # shimmer is more expressive/natural
+                # Slightly slower speed for more natural speech (0.95-1.0)
+                speed = self.config.get("voice_speed", 0.95)
+                # Use HD model for more human-like quality
+                tts_model = self.config.get("tts_model", "tts-1-hd")
+                
+                # Check if we've cached quota exceeded for TTS
+                now = time.time()
+                if self.openai_quota_exceeded and (now - self.quota_check_time < self.QUOTA_CHECK_INTERVAL):
+                    # Skip OpenAI TTS, use fallback directly
+                    raise Exception("Quota exceeded (cached)")
+                
+                if not self.client:
+                    raise Exception("OpenAI client not available")
+                
+                # Use tts-1-hd for higher quality, more human-like voice
+                response = self.client.audio.speech.create(
+                    model=tts_model,  # Higher quality for more natural, human-like voice
+                    voice=voice,
+                    input=processed_text,
+                    speed=speed
+                )
+                
+                # Save audio file
+                audio_dir = Path.home() / ".daisy" / "audio"
+                audio_file = audio_dir / f"daisy_{int(time.time())}.mp3"
+                
+                # Write audio to file
+                audio_data = b""
+                for chunk in response.iter_bytes():
+                    audio_data += chunk
+                
+                with open(audio_file, 'wb') as f:
+                    f.write(audio_data)
+                
+                return self._play_audio_file(str(audio_file))
+                
+            except Exception as e:
+                error_str = str(e)
+                # Check for quota errors
+                if "429" in error_str or "quota" in error_str.lower() or "insufficient_quota" in error_str:
+                    self.openai_quota_exceeded = True
+                    self.quota_check_time = time.time()
+                    print("⚠️  OpenAI TTS quota exceeded - using fallback")
+                else:
+                    print(f"⚠️  OpenAI TTS Error: {e} - using fallback")
+        
+        # Final fallback: macOS say command (but with better voice options)
+        return self._say_tts_fallback(processed_text)
+    
+    def _play_audio_file(self, audio_file: str) -> Optional[bytes]:
+        """Play an audio file and return audio data (interruptible)"""
+        try:
+            audio_path = Path(audio_file)
+            if not audio_path.exists():
+                return None
+            
+            # Play audio using macOS afplay (interruptible)
+            self.is_speaking = True
+            # Reset interrupt flags before starting
+            self.interrupt_event.clear()
+            self.interrupt_detected = False
+            self.current_audio_process = subprocess.Popen(
+                ["afplay", str(audio_path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE
+            )
+            
+            # Poll while playing (so we can interrupt) - CHECK INTERRUPTS FREQUENTLY
+            if self.current_audio_process:
+                while self.current_audio_process.poll() is None:
+                    # Check interrupt flags FIRST (fastest)
+                    if self.interrupt_event.is_set() or not self.is_speaking or self.interrupt_detected:
+                        # Was interrupted - stop immediately
+                        print("\n🔇 [Interrupt detected in afplay - stopping NOW!]")
+                        try:
+                            self.current_audio_process.kill()
+                            self.current_audio_process.wait(timeout=0.05)
+                        except:
+                            pass
+                        # Kill all afplay processes
+                        subprocess.run(["pkill", "-9", "afplay"], check=False,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        break
+                    time.sleep(0.05)  # Check every 50ms (more frequent than 0.2)
+            
+            self.is_speaking = False
+            if self.current_audio_process:
+                self.current_audio_process = None
+            
+            # Read audio data if it's an MP3 (for return value)
+            audio_data = b""
+            if audio_path.suffix == ".mp3":
+                try:
+                    with open(audio_path, 'rb') as f:
+                        audio_data = f.read()
+                except:
+                    pass
+            
+            # Clean up after a delay (optional)
+            threading.Timer(10.0, lambda: audio_path.unlink() if audio_path.exists() else None).start()
+            return audio_data
+            
+        except Exception as e:
+            print(f"⚠️  Error playing audio file: {e}")
+            self.is_speaking = False
+            return None
+    
+    def _say_tts_fallback(self, text: str) -> Optional[bytes]:
+        """Fallback to macOS say command with better voice options"""
+        # Always fallback to macOS say with female voice (interruptible)
+        # Set is_speaking flag BEFORE opening audio stream (so VAD thread can detect it)
+        self.is_speaking = True
+        # Reset interrupt flags
+        self.interrupt_event.clear()
+        self.interrupt_detected = False
+        
+        # Start background thread to listen for "stop" command while speaking
+        stop_listener = threading.Thread(
+            target=self._listen_for_stop_while_speaking,
+            daemon=True,
+            name="StopCommandListener"
+        )
+        stop_listener.start()
+        
+        # Use the most natural female voice on macOS
+        # Samantha is the most natural-sounding, Karen is more expressive
+        # Try Samantha first (most human-like), fallback to Karen
+        fallback_voice = self.config.get("say_voice", "Samantha")
+        
+        # Use natural voice with human-like rate and pitch
+        # Rate 165: natural conversational speed (not too fast, not too slow)
+        # Pitch 52: natural female pitch (slightly higher = more expressive)
+        # These settings create a more human-like, conversational tone
+        # IMPORTANT: Don't redirect stderr - let errors show, and don't use DEVNULL for say command
+        try:
+            self.current_audio_process = subprocess.Popen(
+                ["say", "-v", fallback_voice, "-r", "165", text],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE
+            )
+        except Exception as say_error:
+            print(f"⚠️  Error with say command: {say_error}")
+            # Try without rate parameter as fallback
+            try:
+                self.current_audio_process = subprocess.Popen(
+                    ["say", "-v", fallback_voice, text],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE
+                )
+            except Exception as say_error2:
+                print(f"❌ Cannot use macOS say command: {say_error2}")
+                self.is_speaking = False
+                self.current_audio_process = None
+                return None
+        
+        # Wait for audio to finish playing (interruptible)
+        # Poll instead of blocking wait, so we can check for interrupts
+        start_time = time.time()
+        max_duration = 300  # Max 5 minutes per response
+        
+        # Also check for keyboard input in this loop (most reliable place)
+        import sys
+        import select
+        
+        # Set stdin to non-blocking mode for keyboard detection
+        old_settings = None
+        import termios
+        import tty
+        try:
+            if sys.stdin.isatty():
+                old_settings = termios.tcgetattr(sys.stdin)
+                # Set to non-blocking raw mode for single character input
+                tty.setcbreak(sys.stdin.fileno())
+        except:
+            old_settings = None
+        
+        try:
+            while self.current_audio_process.poll() is None:
+                # Check interrupt flags FIRST (fastest check) - MUST BE FIRST
+                if self.interrupt_event.is_set() or not self.is_speaking or self.interrupt_detected:
+                    # Was interrupted - stop audio process immediately
+                    print("\n🔇 [INTERRUPT DETECTED - Stopping NOW!]")
+                    # Force kill the audio process IMMEDIATELY
+                    if self.current_audio_process:
+                        try:
+                            self.current_audio_process.kill()  # Kill immediately, no terminate
+                            self.current_audio_process.wait(timeout=0.05)
+                        except:
+                            pass
+                    # Also kill all say/afplay processes immediately
+                    try:
+                        subprocess.run(["pkill", "-9", "say"], check=False,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.1)
+                        subprocess.run(["pkill", "-9", "afplay"], check=False,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.1)
+                    except:
+                        pass
+                    self.is_speaking = False
+                    break
+                
+                # Check for keyboard interrupt (works while audio is playing) - VERY FREQUENT
+                try:
+                    if sys.stdin.isatty() and old_settings is not None:
+                        # Check if any key was pressed (non-blocking, 20ms timeout - very fast)
+                        ready, _, _ = select.select([sys.stdin], [], [], 0.02)
+                        if ready:
+                            # Key pressed - interrupt immediately
+                            char = sys.stdin.read(1)
+                            print(f"\n⌨️  [KEY PRESSED ({repr(char)})! - Stopping immediately...]")
+                            self.stop_speaking()
+                            break
+                except (OSError, ValueError, KeyboardInterrupt):
+                    # Terminal errors - just use flags instead
+                    pass
+                except Exception:
+                    pass  # Ignore other errors
+                
+                # Check if audio is taking too long (might be stuck)
+                if time.time() - start_time > max_duration:
+                    print("⚠️  [Audio playback taking too long - stopping]")
+                    self.stop_speaking()
+                    break
+                
+                time.sleep(0.02)  # Check every 20ms (very frequent)
+        finally:
+            # Restore terminal settings
+            if old_settings:
+                try:
+                    termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+                except:
+                    pass
+        
+        # Check if process completed successfully
+        if self.current_audio_process and self.current_audio_process.returncode != 0:
+            # Process failed - check stderr for errors
+            try:
+                stderr_output = self.current_audio_process.stderr.read().decode() if self.current_audio_process.stderr else ""
+                if stderr_output:
+                    print(f"⚠️  Audio playback error: {stderr_output[:100]}")
+            except:
+                pass
+        
+        self.is_speaking = False
+        self.interrupt_event.clear()  # Reset interrupt event for next time
+        if self.current_audio_process:
+            self.current_audio_process = None
+        return None
+    
+    def listen_for_voice(self, timeout: int = 5, interruptible: bool = True) -> Optional[str]:
+        """Listen for voice input and convert to text using Groq Whisper (like Praiser) - can interrupt while Daisy is speaking"""
+        if not self.microphone:
+            return None
+        
+        # Check if we just interrupted - ignore audio for cooldown period
+        now = time.time()
+        if self.interrupt_time > 0 and (now - self.interrupt_time < self.INTERRUPT_COOLDOWN):
+            remaining = self.INTERRUPT_COOLDOWN - (now - self.interrupt_time)
+            print(f"⏸️  [Interrupt cooldown - ignoring audio for {remaining:.1f}s]")
+            return None
+        
+        # If Daisy is speaking and interrupt detected, don't listen
+        if self.is_speaking and self.interrupt_detected:
+            print("🔇 [Interrupted]")
+            return None
+            
+        try:
+            with self.microphone as source:
+                print("🎤 Listening...")
+                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                audio = self.recognizer.listen(source, timeout=timeout, phrase_time_limit=10)
+            
+            print("🔄 Processing speech with Groq Whisper...")
+            
+            # Use Groq Whisper (PROVEN WORKING - same as Praiser)
+            # Groq Whisper is much better at understanding whispers and quiet speech
+            if self.groq_client:
+                try:
+                    # Convert audio to format Groq expects
+                    audio_data = io.BytesIO(audio.get_wav_data())
+                    audio_data.name = "audio.wav"
+                    
+                    # Use whisper-large-v3-turbo (same model as Praiser uses)
+                    transcript = self.groq_client.audio.transcriptions.create(
+                        file=audio_data,
+                        model="whisper-large-v3-turbo",
+                        response_format="json",
+                        temperature=0.2,  # Lower temperature for more accurate transcription
+                    )
+                    text = transcript.text
+                    print(f"✅ Groq Whisper transcription successful")
+                except Exception as e:
+                    error_str = str(e)
+                    print(f"⚠️  Groq Whisper failed: {error_str[:100]}")
+                    # Fallback to Google Speech Recognition
+                    try:
+                        text = self.recognizer.recognize_google(audio)
+                        print("💡 Using Google Speech (Groq fallback)")
+                    except Exception as google_error:
+                        print(f"❌ Google Speech also failed: {google_error}")
+                        return None
+            else:
+                # No Groq client - try OpenAI Whisper as fallback
+                if self.client:
+                    try:
+                        audio_data = io.BytesIO(audio.get_wav_data())
+                        audio_data.name = "audio.wav"
+                        transcript = self.client.audio.transcriptions.create(
+                            model="whisper-1",
+                            file=audio_data,
+                            language="en"
+                        )
+                        text = transcript.text
+                        print("💡 Using OpenAI Whisper (Groq not available)")
+                    except Exception as e:
+                        error_str = str(e)
+                        print(f"⚠️  OpenAI Whisper failed: {error_str[:100]}")
+                        # Final fallback to Google
+                        try:
+                            text = self.recognizer.recognize_google(audio)
+                            print("💡 Using Google Speech (final fallback)")
+                        except Exception as google_error:
+                            print(f"❌ All speech recognition failed: {google_error}")
+                            return None
+                else:
+                    # No API clients available - use Google
+                    try:
+                        text = self.recognizer.recognize_google(audio)
+                        print("💡 Using Google Speech (no API clients)")
+                    except Exception as google_error:
+                        print(f"❌ Google Speech failed: {google_error}")
+                        return None
+            
+            # Check if user wants to interrupt/stop Daisy - MORE AGGRESSIVE
+            text_lower = text.lower().strip()
+            interrupt_commands = ["stop", "stop speaking", "stop talking", "quiet", "shush", "enough", "shut up", "shutup", "be quiet", "silence", "halt"]
+            
+            if interruptible and any(cmd in text_lower for cmd in interrupt_commands):
+                # User wants to interrupt - stop speaking immediately
+                print(f"\n🔇 [STOP COMMAND DETECTED: '{text}']")
+                # Set flags FIRST before calling stop_speaking
+                self.interrupt_detected = True
+                self.interrupt_event.set()
+                self.is_speaking = False
+                # Then kill all processes
+                self.stop_speaking()
+                print("✅ [SPEECH STOPPED]")
+                # Don't add this to conversation history, just return None to continue listening
+                return None
+            
+            print(f"👤 You: {text}")
+            # Debug: Show if this looks like it might be keyboard noise
+            if len(text) < 5 and text.lower() in ['thank you', 'thanks', 'ok', 'okay', 'so']:
+                print(f"⚠️  [Short common phrase detected - might be keyboard noise or echo]")
+            return text
+            
+        except sr.WaitTimeoutError:
+            print("⏱️  Listening timeout")
+            return None
+        except sr.UnknownValueError:
+            print("❓ Could not understand audio")
+            return None
+        except Exception as e:
+            print(f"❌ Error recognizing speech: {e}")
+            return None
+    
+    def _listen_for_stop_while_speaking(self):
+        """Background thread that continuously listens for 'stop' command while Daisy is speaking"""
+        if not self.microphone:
+            return
+        
+        # Wait a moment for audio to start
+        time.sleep(0.5)
+        
+        # Keep listening while Daisy is speaking
+        while self.is_speaking and not self.interrupt_detected:
+            try:
+                with self.microphone as source:
+                    try:
+                        # Very short listen - just checking for "stop"
+                        audio = self.recognizer.listen(source, timeout=0.5, phrase_time_limit=1)
+                        
+                        # Try to recognize quickly using Groq Whisper (better accuracy)
+                        text = None
+                        if self.groq_client:
+                            try:
+                                audio_data = io.BytesIO(audio.get_wav_data())
+                                audio_data.name = "audio.wav"
+                                transcript = self.groq_client.audio.transcriptions.create(
+                                    file=audio_data,
+                                    model="whisper-large-v3-turbo",
+                                    response_format="json",
+                                    temperature=0.2,
+                                )
+                                text = transcript.text
+                            except:
+                                pass
+                        
+                        # Fallback to Google if Groq failed
+                        if not text:
+                            try:
+                                text = self.recognizer.recognize_google(audio)
+                            except:
+                                pass
+                        
+                        if text:
+                            text_lower = text.lower().strip()
+                            # Check for interrupt commands
+                            interrupt_commands = ["stop", "stop speaking", "stop talking", "quiet", "shush", "enough", "shut up", "be quiet"]
+                            if any(cmd in text_lower for cmd in interrupt_commands):
+                                print(f"\n🔇 [STOP COMMAND DETECTED: '{text}']")
+                                self.stop_speaking()
+                                break
+                    except sr.WaitTimeoutError:
+                        # No voice detected, continue listening
+                        pass
+                    except Exception as e:
+                        # Error listening, continue trying
+                        pass
+            except Exception as e:
+                # Error with microphone, continue trying
+                pass
+            
+            # Small delay before next listen attempt
+            time.sleep(0.3)
+    
+    def detect_language(self, text: str) -> str:
+        """Detect language from text - returns 'el' for Greek, 'en' for English, etc."""
+        if not text:
+            return "en"
+        
+        # Check for Greek characters (Greek Unicode ranges)
+        greek_pattern = re.compile(r'[\u0370-\u03FF\u1F00-\u1FFF]')
+        greek_char_count = len(greek_pattern.findall(text))
+        total_chars = len(re.findall(r'[a-zA-Z\u0370-\u03FF\u1F00-\u1FFF]', text))
+        
+        # If significant Greek characters, it's Greek
+        if total_chars > 0 and (greek_char_count / total_chars) > 0.3:
+            return "el"  # Greek
+        
+        return "en"  # Default to English
+    
+    def update_system_prompt_for_language(self, language: str):
+        """Update system prompt to match user's language"""
+        if language == "el":
+            # Greek system prompt
+            self.system_prompt = """Είσαι η Daisy, μια φιλική και εξυπηρετική προσωπική βοηθός AI.
+Έχεις μια ζεστή, επαγγελματική και ελαφρώς συνομιλητική προσωπικότητα.
+Βοηθάς με εργασίες, απαντάς σε ερωτήσεις και συμμετέχεις σε φυσικές συνομιλίες.
+Κρατά τις απαντήσεις σου συνοπτικές αλλά φιλικές. Χρησιμοποίησε φυσικά πρότυπα ομιλίας.
+
+🚨 ΚΡΙΣΙΜΕΣ ΟΔΗΓΙΕΣ ΓΛΩΣΣΑΣ:
+- ΠΡΕΠΕΙ να απαντάς ΟΛΟΚΛΗΡΩΤΙΚΑ στα ΕΛΛΗΝΙΚΑ - ΚΑΘΕ ΛΕΞΗ
+- Χρησιμοποίησε ΣΩΣΤΗ ΕΛΛΗΝΙΚΗ ΓΡΑΜΜΑΤΙΚΗ - σωστές κλίσεις, άρθρα, προτάσεις
+- Μίλα σαν ΕΛΛΗΝΑΣ - όχι μετάφραση, φυσική ελληνική ομιλία
+- ΜΗΝ χρησιμοποιείς Αγγλικά - ΜΟΝΟ Ελληνικά"""
+        else:
+            # English system prompt
+            self.system_prompt = self.base_system_prompt
+        
+        # Update system message in conversation
+        if self.conversation_history and self.conversation_history[0].role == 'system':
+            self.conversation_history[0].content = self.system_prompt
+        else:
+            # Remove old system message and add new one
+            self.conversation_history = [msg for msg in self.conversation_history if msg.role != 'system']
+            self.add_system_message(self.system_prompt)
+    
+    def stream_llm_response(self, user_input: str):
+        """Stream LLM response chunk by chunk (for real-time TTS like ChatGPT Voice)"""
+        # Detect language from user input
+        detected_lang = self.detect_language(user_input)
+        if detected_lang != self.current_language:
+            self.current_language = detected_lang
+            self.update_system_prompt_for_language(detected_lang)
+            lang_name = "Greek" if detected_lang == "el" else "English"
+            print(f"🌍 Language detected: {detected_lang.upper()} ({lang_name})")
+        
+        # Add user message
+        self.add_message('user', user_input)
+        messages = self.get_conversation_context()
+        
+        # Check if we've cached a quota exceeded status
+        now = time.time()
+        if self.openai_quota_exceeded:
+            if now - self.quota_check_time < self.QUOTA_CHECK_INTERVAL:
+                # Use cached status - skip OpenAI, go straight to Groq
+                if self.groq_client:
+                    print("💡 Using Groq (OpenAI quota exceeded - cached)")
+                    yield from self.stream_groq_response(messages)
+                    return
+                else:
+                    error_msg = "I'm sorry, I've exceeded my API quota. Please check your OpenAI account billing and usage limits."
+                    self.add_message('assistant', error_msg)
+                    yield error_msg
+                    return
+            else:
+                # Cache expired - reset and try OpenAI again
+                self.openai_quota_exceeded = False
+                print("🔄 Cache expired - checking OpenAI quota again...")
+        
+        # Try OpenAI streaming first
+        if self.client:
+            try:
+                model = self.config.get("llm_model", "gpt-3.5-turbo")
+                stream = self.client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=0.7,
+                    max_tokens=500,
+                    stream=True  # Enable streaming
+                )
+                
+                full_response = ""
+                for chunk in stream:
+                    if chunk.choices[0].delta.content:
+                        content = chunk.choices[0].delta.content
+                        full_response += content
+                        yield content
+                
+                # Handle None or empty response
+                if not full_response or full_response.strip() == "":
+                    full_response = "I'm sorry, I couldn't generate a response. Please try again."
+                    yield full_response
+                elif not isinstance(full_response, str):
+                    full_response = str(full_response)
+                    yield full_response
+                
+                self.add_message('assistant', full_response)
+                print(f"✅ Response from OpenAI ({model})")
+                return
+                
+            except Exception as e:
+                error_str = str(e)
+                print(f"⚠️  OpenAI error: {error_str[:100]}")
+                
+                # Handle specific error cases
+                if "404" in error_str or "model_not_found" in error_str:
+                    print(f"❌ Model not found: {model}")
+                    print(f"💡 Trying fallback model: gpt-3.5-turbo")
+                    try:
+                        stream = self.client.chat.completions.create(
+                            model="gpt-3.5-turbo",
+                            messages=messages,
+                            temperature=0.7,
+                            max_tokens=500,
+                            stream=True
+                        )
+                        
+                        full_response = ""
+                        for chunk in stream:
+                            if chunk.choices[0].delta.content:
+                                content = chunk.choices[0].delta.content
+                                full_response += content
+                                yield content
+                        
+                        if not full_response or full_response.strip() == "":
+                            full_response = "I'm sorry, I couldn't generate a response. Please try again."
+                            yield full_response
+                        elif not isinstance(full_response, str):
+                            full_response = str(full_response)
+                            yield full_response
+                        
+                        self.add_message('assistant', full_response)
+                        self.config['llm_model'] = 'gpt-3.5-turbo'
+                        self.save_config()
+                        print(f"✅ Response from OpenAI (gpt-3.5-turbo fallback)")
+                        return
+                    except Exception as e2:
+                        # Still failed, try Groq if available
+                        if self.groq_client:
+                            print("🔄 Falling back to Groq...")
+                            yield from self.stream_groq_response(messages)
+                            return
+                        error_msg = "I'm sorry, I'm having trouble connecting to the AI service. Please check your API key and account status."
+                        yield error_msg
+                        self.add_message('assistant', error_msg)
+                        return
+                
+                # Fallback to Groq on quota/401 errors
+                elif any(x in error_str for x in ["429", "401", "quota", "insufficient_quota"]):
+                    self.openai_quota_exceeded = True
+                    self.quota_check_time = time.time()
+                    
+                    if self.groq_client:
+                        print("🔄 Falling back to Groq (quota/API key error - cached for 1 hour)")
+                        yield from self.stream_groq_response(messages)
+                        return
+                    error_msg = "I'm sorry, I've exceeded my API quota. Please check your OpenAI account billing and usage limits."
+                    yield error_msg
+                    self.add_message('assistant', error_msg)
+                    return
+                else:
+                    # Other errors - try Groq if available
+                    if self.groq_client:
+                        print("🔄 Falling back to Groq...")
+                        yield from self.stream_groq_response(messages)
+                        return
+                    error_msg = f"I'm sorry, I encountered an error: {str(e)}"
+                    yield error_msg
+                    self.add_message('assistant', error_msg)
+                    return
+        
+        # Use Groq if OpenAI not available
+        if self.groq_client:
+            print("🔄 Using Groq (OpenAI not available)...")
+            yield from self.stream_groq_response(messages)
+            return
+        
+        error_msg = "I'm sorry, no AI service is available. Please check your API keys."
+        yield error_msg
+        self.add_message('assistant', error_msg)
+    
+    def stream_groq_response(self, messages: List[Dict]):
+        """Stream Groq response chunk by chunk"""
+        if not self.groq_client:
+            error_msg = "I'm sorry, Groq is not available."
+            yield error_msg
+            self.add_message('assistant', error_msg)
+            return
+        
+        # Check if we have a cached working model
+        now = time.time()
+        use_cached_model = False
+        
+        if self.groq_working_model:
+            check_time = self.groq_model_check_time or 0
+            if check_time > 0 and (now - check_time < self.GROQ_MODEL_CHECK_INTERVAL):
+                use_cached_model = True
+                print(f"💡 Using cached Groq model: {self.groq_working_model}")
+                
+                try:
+                    stream = self.groq_client.chat.completions.create(
+                        model=self.groq_working_model,
+                        messages=messages,
+                        temperature=0.7,
+                        max_tokens=500,
+                        stream=True  # Enable streaming
+                    )
+                    
+                    full_response = ""
+                    for chunk in stream:
+                        if chunk.choices[0].delta.content:
+                            content = chunk.choices[0].delta.content
+                            full_response += content
+                            yield content
+                    
+                    if not full_response or full_response.strip() == "":
+                        full_response = "I'm sorry, I couldn't generate a response. Please try again."
+                        yield full_response
+                    elif not isinstance(full_response, str):
+                        full_response = str(full_response)
+                        yield full_response
+                    
+                    self.groq_model_check_time = time.time()
+                    self.config["groq_model_check_time"] = self.groq_model_check_time
+                    self.save_config()
+                    
+                    self.add_message('assistant', full_response)
+                    print(f"✅ Response from Groq ({self.groq_working_model})")
+                    return
+                except Exception as e:
+                    error_str = str(e)
+                    if any(x in error_str.lower() for x in ["404", "model_not_found", "decommissioned"]):
+                        print(f"⚠️  Cached model {self.groq_working_model} no longer available - searching for new one...")
+                    else:
+                        print(f"⚠️  Cached model {self.groq_working_model} failed - searching for new one...")
+                    self.groq_working_model = None
+                    use_cached_model = False
+        
+        # No cached model or cache expired - fetch and try models
+        if not use_cached_model:
+            models = self.fetch_groq_models()
+            if not models:
+                error_msg = "I'm sorry, no Groq models are available."
+                yield error_msg
+                self.add_message('assistant', error_msg)
+                return
+            
+            last_error = None
+            
+            # Try each model until one works
+            for model in models:
+                try:
+                    print(f"🔄 Trying Groq model: {model}")
+                    
+                    stream = self.groq_client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        temperature=0.7,
+                        max_tokens=500,
+                        stream=True  # Enable streaming
+                    )
+                    
+                    full_response = ""
+                    for chunk in stream:
+                        if chunk.choices[0].delta.content:
+                            content = chunk.choices[0].delta.content
+                            full_response += content
+                            yield content
+                    
+                    if not full_response or full_response.strip() == "":
+                        full_response = "I'm sorry, I couldn't generate a response. Please try again."
+                        yield full_response
+                    elif not isinstance(full_response, str):
+                        full_response = str(full_response)
+                        yield full_response
+                    
+                    # Cache this working model for 1 hour
+                    self.groq_working_model = model
+                    self.groq_model_check_time = time.time()
+                    self.config["groq_working_model"] = model
+                    self.config["groq_model_check_time"] = self.groq_model_check_time
+                    self.save_config()
+                    
+                    self.add_message('assistant', full_response)
+                    print(f"✅ Response from Groq ({model}) - cached for 1 hour")
+                    return
+                        
+                except Exception as e:
+                    last_error = e
+                    error_str = str(e)
+                    
+                    if any(x in error_str.lower() for x in ["404", "model_not_found", "decommissioned"]):
+                        print(f"⚠️  Model {model} not available, trying next...")
+                        continue
+                    else:
+                        # Other error - try next model
+                        print(f"⚠️  Model {model} error: {error_str[:100]}, trying next...")
+                        continue
+            
+            # All models failed
+            if last_error:
+                error_msg = f"I'm sorry, all Groq models failed. Last error: {str(last_error)}"
+            else:
+                error_msg = "I'm sorry, no Groq models are available."
+            yield error_msg
+            self.add_message('assistant', error_msg)
+    
+    def get_llm_response(self, user_input: str) -> str:
+        """Get response from LLM with intelligent provider selection (inspired by Horizons OmniChat)"""
+        # Detect language from user input
+        detected_lang = self.detect_language(user_input)
+        if detected_lang != self.current_language:
+            self.current_language = detected_lang
+            self.update_system_prompt_for_language(detected_lang)
+            lang_name = "Greek" if detected_lang == "el" else "English"
+            print(f"🌍 Language detected: {detected_lang.upper()} ({lang_name})")
+        
+        # Add user message
+        self.add_message('user', user_input)
+        messages = self.get_conversation_context()
+        
+        # Optimize for voice: add instruction to keep response brief
+        voice_optimized_messages = messages.copy()
+        # Add a reminder at the end to keep response brief (if not already in system prompt)
+        if len(voice_optimized_messages) > 0 and voice_optimized_messages[-1]["role"] == "user":
+            # Don't modify, just use as is - system prompt already has voice guidelines
+            pass
+        
+        # Check if we've cached a quota exceeded status
+        now = time.time()
+        if self.openai_quota_exceeded:
+            # If we cached quota exceeded, check if enough time has passed
+            if now - self.quota_check_time < self.QUOTA_CHECK_INTERVAL:
+                # Use cached status - skip OpenAI, go straight to Groq
+                if self.groq_client:
+                    print("💡 Using Groq (OpenAI quota exceeded - cached)")
+                    return self._optimize_response_for_voice(self.get_groq_response(voice_optimized_messages))
+                else:
+                    error_msg = "I'm sorry, I've exceeded my API quota. Please check your OpenAI account billing and usage limits."
+                    self.add_message('assistant', error_msg)
+                    return error_msg
+            else:
+                # Cache expired - reset and try OpenAI again
+                self.openai_quota_exceeded = False
+                print("🔄 Cache expired - checking OpenAI quota again...")
+        
+        # Try OpenAI first
+        if self.client:
+            try:
+                model = self.config.get("llm_model", "gpt-3.5-turbo")
+                # Optimize max_tokens for voice responses (shorter is better)
+                max_tokens = self.config.get("max_response_tokens", 200)  # Shorter for voice
+                response = self.client.chat.completions.create(
+                    model=model, 
+                    messages=voice_optimized_messages, 
+                    temperature=0.7, 
+                    max_tokens=max_tokens
+                )
+                assistant_message = response.choices[0].message.content
+                
+                # Handle None or empty response
+                if not assistant_message or assistant_message.strip() == "":
+                    assistant_message = "I'm sorry, I couldn't generate a response. Please try again."
+                elif not isinstance(assistant_message, str):
+                    assistant_message = str(assistant_message)
+                
+                # Optimize response for voice
+                assistant_message = self._optimize_response_for_voice(assistant_message)
+                
+                self.add_message('assistant', assistant_message)
+                print(f"✅ Response from OpenAI ({model})")
+                return assistant_message
+                
+            except Exception as e:
+                error_str = str(e)
+                print(f"⚠️  OpenAI error: {error_str[:100]}")
+                
+                # Handle specific error cases
+                if "404" in error_str or "model_not_found" in error_str:
+                    print(f"❌ Model not found: {model}")
+                    print(f"💡 Trying fallback model: gpt-3.5-turbo")
+                    # Try with gpt-3.5-turbo as fallback
+                    try:
+                        max_tokens = self.config.get("max_response_tokens", 200)
+                        response = self.client.chat.completions.create(
+                            model="gpt-3.5-turbo",
+                            messages=voice_optimized_messages,
+                            temperature=0.7,
+                            max_tokens=max_tokens
+                        )
+                        assistant_message = response.choices[0].message.content
+                        # Handle None or empty response
+                        if not assistant_message or assistant_message.strip() == "":
+                            assistant_message = "I'm sorry, I couldn't generate a response. Please try again."
+                        elif not isinstance(assistant_message, str):
+                            assistant_message = str(assistant_message)
+                        
+                        # Optimize response for voice
+                        assistant_message = self._optimize_response_for_voice(assistant_message)
+                        
+                        self.add_message('assistant', assistant_message)
+                        self.config['llm_model'] = 'gpt-3.5-turbo'
+                        self.save_config()
+                        print(f"✅ Response from OpenAI (gpt-3.5-turbo fallback)")
+                        return assistant_message
+                    except Exception as e2:
+                        # Still failed, try Groq if available
+                        if self.groq_client:
+                            print("🔄 Falling back to Groq...")
+                            return self._optimize_response_for_voice(self.get_groq_response(voice_optimized_messages))
+                        error_msg = "I'm sorry, I'm having trouble connecting to the AI service. Please check your API key and account status."
+                # Fallback to Groq on quota/401 errors
+                elif any(x in error_str for x in ["429", "401", "quota", "insufficient_quota"]):
+                    # Cache the quota exceeded status (don't check again for 1 hour)
+                    self.openai_quota_exceeded = True
+                    self.quota_check_time = time.time()
+                    
+                    if self.groq_client:
+                        print("🔄 Falling back to Groq (quota/API key error - cached for 1 hour)")
+                        return self._optimize_response_for_voice(self.get_groq_response(voice_optimized_messages))
+                    error_msg = "I'm sorry, I've exceeded my API quota. Please check your OpenAI account billing and usage limits."
+                    print(f"❌ Quota exceeded - check your OpenAI account (cached for 1 hour)")
+                else:
+                    # Other errors - try Groq if available
+                    if self.groq_client:
+                        print("🔄 Falling back to Groq...")
+                        return self._optimize_response_for_voice(self.get_groq_response(voice_optimized_messages))
+                    error_msg = f"I'm sorry, I encountered an error: {str(e)}"
+                
+                print(f"❌ LLM Error: {e}")
+                self.add_message('assistant', error_msg)
+                return error_msg
+        
+        # Use Groq if OpenAI not available
+        if self.groq_client:
+            print("🔄 Using Groq (OpenAI not available)...")
+            return self._optimize_response_for_voice(self.get_groq_response(voice_optimized_messages))
+        
+        # Enhanced error message with helpful guidance
+        error_msg = "I'm sorry, no AI service is available. Please check your API keys in ~/.daisy/config.json or set OPENAI_API_KEY and GROQ_API_KEY environment variables."
+        self.add_message('assistant', error_msg)
+        print("💡 Tip: Set at least one API key (OpenAI or Groq) to use Daisy")
+        return error_msg
+    
+    def _optimize_response_for_voice(self, text: str) -> str:
+        """Optimize LLM response for voice output (inspired by Horizons OmniChat's approach)"""
+        if not text:
+            return text
+        
+        # Remove markdown formatting that doesn't work well in speech
+        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)  # Remove bold
+        text = re.sub(r'\*(.*?)\*', r'\1', text)  # Remove italic
+        text = re.sub(r'`(.*?)`', r'\1', text)  # Remove code blocks
+        text = re.sub(r'#{1,6}\s+', '', text)  # Remove headers
+        
+        # Replace common text patterns with speech-friendly versions
+        replacements = {
+            '&': 'and',
+            '@': 'at',
+            '%': 'percent',
+            '$': 'dollars',
+            '#': 'number',
+            '...': '...',  # Keep ellipsis
+            ' - ': ', ',  # Replace dashes with pauses
+            '\n\n': '. ',  # Replace double newlines with periods
+            '\n': ' ',  # Replace single newlines with spaces
+        }
+        
+        for old, new in replacements.items():
+            text = text.replace(old, new)
+        
+        # Remove excessive whitespace
+        text = re.sub(r'\s+', ' ', text)
+        text = text.strip()
+        
+        # Truncate very long responses (voice assistants should be brief)
+        max_length = self.config.get("max_voice_response_length", 500)
+        if len(text) > max_length:
+            # Try to truncate at sentence boundary
+            sentences = re.split(r'([.!?]+)', text[:max_length])
+            if len(sentences) > 2:
+                text = ''.join(sentences[:-2]) + '...'
+            else:
+                text = text[:max_length] + '...'
+        
+        return text
+    
+    def show_notification(self, title: str, message: str):
+        """Show macOS notification"""
+        script = f'''
+        display notification "{message}" with title "{title}"
+        '''
+        subprocess.run(["osascript", "-e", script], check=False)
+    
+    def save_conversation(self):
+        """Save conversation to file"""
+        if not self.config.get("save_conversations", True):
+            return
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        conv_file = Path.home() / ".daisy" / "conversations" / f"conversation_{timestamp}.json"
+        
+        conversation_data = {
+            "timestamp": timestamp,
+            "messages": [asdict(msg) for msg in self.conversation_history]
+        }
+        
+        with open(conv_file, 'w') as f:
+            json.dump(conversation_data, f, indent=2)
+    
+    def speak_and_listen_loop(self):
+        """Main conversation loop: speak, listen, respond (enhanced with better flow)"""
+        print("\n" + "="*60)
+        print("💬 Daisy is ready to chat!")
+        print("Speak naturally, or type 'quit' to exit")
+        print("="*60 + "\n")
+        
+        # Enhanced initial greeting with better voice assistant behavior
+        greeting = "Hi! I'm Daisy, your personal assistant. How can I help you today?"
+        print(f"🤖 Daisy: {greeting}")
+        self.text_to_speech(greeting)
+        self.add_message('assistant', greeting)
+        
+        auto_listen = self.config.get("auto_listen", True)
+        
+        while True:
+            try:
+                # Listen for input (check for interrupt commands)
+                if auto_listen and self.microphone:
+                    user_input = self.listen_for_voice(timeout=10, interruptible=True)
+                    if not user_input:
+                        continue
+                else:
+                    # Fallback to text input
+                    user_input = input("\n👤 You (or 'quit'): ").strip()
+                
+                if not user_input:
+                    continue
+                
+                # Ignore very short inputs (likely keyboard noise or accidental triggers)
+                if len(user_input.strip()) < 3:
+                    print(f"⏭️  [Ignoring very short input: '{user_input}']")
+                    continue
+                
+                # Ignore inputs that look like keyboard escape sequences or control characters
+                if re.search(r'[\x00-\x1f\x7f-\x9f]', user_input) or user_input.startswith('^'):
+                    print(f"⏭️  [Ignoring keyboard control sequence: '{user_input[:20]}']")
+                    continue
+                
+                # Filter out repetitive "thank you" responses right after interrupt or response
+                now = time.time()
+                time_since_interrupt = now - self.interrupt_time if self.interrupt_time > 0 else 999
+                time_since_response = now - self.last_response_time if self.last_response_time > 0 else 999
+                
+                # Check if this is a "thank you" variant
+                thank_you_variants = [
+                    'thank you', 'thanks', 'thank you.', 'thanks.', 'thank you!', 'thanks!',
+                    'thank you very much', 'thanks a lot', 'thank you so much', 'thanks so much',
+                    'ty', 'thx', 'thank u', 'thnx'
+                ]
+                
+                user_input_lower = user_input.lower().strip()
+                is_thank_you = any(variant in user_input_lower for variant in thank_you_variants)
+                
+                # Filter "thank you" only if we JUST responded (to prevent immediate loops)
+                # But be less aggressive - only skip if it's within 5 seconds AND we already responded to thank you
+                if is_thank_you:
+                    # Only skip if we responded very recently (5 seconds) AND already responded to thank you
+                    if time_since_response < 5.0:
+                        # Check if we already responded to "thank you" in the last response
+                        if len(self.conversation_history) > 1:
+                            last_assistant_msg = self.conversation_history[-1]
+                            if last_assistant_msg.role == 'assistant':
+                                last_content = last_assistant_msg.content.lower()
+                                # Only skip if the last response was clearly a "you're welcome" type response
+                                welcome_phrases = ['welcome', 'pleasure', 'glad to help', 'happy to help', 'anytime']
+                                if any(phrase in last_content for phrase in welcome_phrases):
+                                    print(f"⏭️  [Skipping 'thank you' - just said welcome {time_since_response:.1f}s ago]")
+                                    continue
+                    # Skip if we interrupted very recently (3 seconds)
+                    if time_since_interrupt < 3.0:
+                        print(f"⏭️  [Skipping 'thank you' - just interrupted {time_since_interrupt:.1f}s ago]")
+                    continue
+                
+                # Check for exit commands
+                if user_input.lower() in ['quit', 'exit', 'goodbye', 'bye']:
+                    farewell = "Goodbye! It was nice talking with you."
+                    print(f"🤖 Daisy: {farewell}")
+                    self.text_to_speech(farewell)
+                    self.save_conversation()
+                    break
+                
+                
+                # Prevent overlapping responses
+                if self.is_responding:
+                    print("⏸️  [Already responding, please wait...]")
+                    continue
+                
+                # Acquire lock to prevent overlapping
+                with self.response_lock:
+                    self.is_responding = True
+                    try:
+                        # Get LLM response (simpler approach like 0.2)
+                        print("\n🔄 Thinking...")
+                        response = self.get_llm_response(user_input)
+                        
+                        # Speak response (interruptible - say "stop" to interrupt)
+                        print(f"🤖 Daisy: {response}")
+                        print("💡 (Say 'STOP' loudly OR press ANY KEY to interrupt)")
+                        
+                        # Reset interrupt flags BEFORE starting audio (like 0.2)
+                        self.interrupt_event.clear()
+                        self.interrupt_detected = False
+                        self.is_speaking = False  # Will be set to True in text_to_speech
+                        
+                        # Just call text_to_speech - it handles all interrupt checking internally (like 0.2)
+                        self.text_to_speech(response)
+                        
+                        # Record response time to prevent immediate loops
+                        self.last_response_time = time.time()
+                        
+                        # Use full_response if we have it, otherwise use the last message
+                        display_response = response
+                        self.show_notification("Daisy", display_response[:100])
+                        
+                        # Save conversation periodically
+                        if len(self.conversation_history) % 10 == 0:
+                            self.save_conversation()
+                    finally:
+                        # Always release the lock
+                        self.is_responding = False
+                
+            except KeyboardInterrupt:
+                print("\n\n👋 Goodbye!")
+                self.save_conversation()
+                break
+            except Exception as e:
+                print(f"❌ Error in conversation loop: {e}")
+                import traceback
+                traceback.print_exc()
+                time.sleep(1)
+    
+    def _keyboard_interrupt_listener(self):
+        """Background thread that listens for keyboard input to interrupt (ANY KEY) - AGGRESSIVE"""
+        import sys
+        import select
+        import tty
+        import termios
+        
+        if not sys.stdin.isatty():
+            # Not a terminal - can't listen for keyboard
+            return
+        
+        # Try to monitor stdin for ANY key press
+        old_settings = None
+        try:
+            old_settings = termios.tcgetattr(sys.stdin)
+            tty.setcbreak(sys.stdin.fileno())
+            
+            print("⌨️  [Keyboard listener active - press ANY KEY to interrupt]")
+            
+            while self.is_speaking and not self.interrupt_event.is_set():
+                try:
+                    # Check if there's input waiting (non-blocking with VERY short timeout)
+                    ready, _, _ = select.select([sys.stdin], [], [], 0.02)  # 20ms - very fast
+                    if ready:
+                        char = sys.stdin.read(1)
+                        # ANY key triggers interrupt (not just space/enter)
+                        print(f"\n⌨️  [KEY PRESSED ({repr(char)})! Stopping immediately...]")
+                        self.stop_speaking()
+                        break
+                except (OSError, ValueError, KeyboardInterrupt) as e:
+                    # Handle terminal errors gracefully
+                    break
+                except Exception as e:
+                    # Other errors - continue trying
+                    pass
+        except Exception as e:
+            # Can't set terminal mode - keyboard interrupt won't work
+            print(f"⚠️  [Keyboard interrupt unavailable: {str(e)[:50]}]")
+            pass
+        finally:
+            if old_settings:
+                try:
+                    termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+                except:
+                    pass
+    
+    def _listen_for_interrupt(self):
+        """Background thread that uses direct pyaudio VAD to detect ANY user speech while Daisy is speaking"""
+        # Use pyaudio directly for VAD - more reliable than speech_recognition during audio playback
+        if not PYAUDIO_AVAILABLE:
+            print("⚠️  [VAD: pyaudio not available - use keyboard to interrupt]")
+            return
+        
+        print("🎤 [VAD active - start speaking anytime to interrupt]")
+        
+        import pyaudio
+        
+        # Try to import audioop (deprecated in Python 3.13+, but still works)
+        try:
+            import audioop
+            USE_AUDIOOP = True
+        except ImportError:
+            # Fallback to manual RMS calculation if audioop not available
+            USE_AUDIOOP = False
+            import struct
+        
+        # Audio settings
+        CHUNK = 512  # Small chunks for fast response
+        FORMAT = pyaudio.paInt16
+        CHANNELS = 1
+        RATE = 16000
+        
+        audio = None
+        stream = None
+        
+        try:
+            # Open audio stream ONCE at the start
+            audio = pyaudio.PyAudio()
+            
+            # Find available input device (might help with conflicts)
+            try:
+                default_input = audio.get_default_input_device_info()
+                device_index = default_input['index']
+            except:
+                device_index = None
+            
+            stream = audio.open(
+                format=FORMAT,
+                channels=CHANNELS,
+                rate=RATE,
+                input=True,
+                input_device_index=device_index,
+                frames_per_buffer=CHUNK
+            )
+            
+            # Skip initial frames to avoid startup noise
+            for _ in range(5):
+                try:
+                    stream.read(CHUNK, exception_on_overflow=False)
+                except:
+                    pass
+            
+            print("🎤 [VAD listener ready - monitoring for voice...]")
+            
+            # VAD state
+            frame_count = 0
+            energy_threshold = 6000  # Start higher to avoid false positives from Daisy's audio
+            consecutive_voice = 0
+            frames_needed = 3  # Need 3 consecutive frames (~96ms) to confirm voice
+            
+            # Main VAD loop - keep reading while Daisy is speaking
+            # Wait a moment for is_speaking to be set
+            wait_count = 0
+            while wait_count < 10 and not self.is_speaking:
+                time.sleep(0.05)
+                wait_count += 1
+            
+            while self.is_speaking and not self.interrupt_event.is_set():
+                try:
+                    frame_count += 1
+                    
+                    # Check if audio process finished (only if it exists)
+                    if self.current_audio_process is None:
+                        # No audio process yet - wait a bit
+                        time.sleep(0.05)
+                        continue
+                    elif self.current_audio_process.poll() is not None:
+                        # Audio finished - exit
+                        break
+                    
+                    # Check if interrupt already detected
+                    if self.interrupt_detected:
+                        break
+                    
+                    # Read audio chunk (non-blocking)
+                    try:
+                        audio_data = stream.read(CHUNK, exception_on_overflow=False)
+                    except Exception as e:
+                        # Stream error - retry with small delay
+                        time.sleep(0.05)
+                        continue
+                    
+                    # Calculate RMS energy for voice activity detection
+                    if USE_AUDIOOP:
+                        rms = audioop.rms(audio_data, 2)  # 2 = 16-bit samples
+                    else:
+                        # Manual RMS calculation if audioop not available
+                        samples = struct.unpack('<' + ('h' * (len(audio_data) // 2)), audio_data)
+                        rms = int((sum(x*x for x in samples) / len(samples)) ** 0.5)
+                    
+                    # Adaptive threshold: lower over time to detect user voice even with echo
+                    if frame_count > 30:  # After ~960ms, lower threshold
+                        energy_threshold = max(6000 * 0.5, 3500)
+                    elif frame_count > 10:  # After ~320ms, start lowering
+                        energy_threshold = max(6000 * 0.7, 4500)
+                    
+                    # Check for voice activity
+                    if rms > energy_threshold:
+                        consecutive_voice += 1
+                        # Debug: show when voice detected
+                        if consecutive_voice == 1:
+                            print(f"🎤 [Voice activity detected (RMS: {rms}, threshold: {int(energy_threshold)})]")
+                        
+                        # If multiple consecutive frames with voice, interrupt immediately
+                        if consecutive_voice >= frames_needed:
+                            print(f"🔇 [User speaking detected! (RMS: {rms}) - Stopping immediately...]")
+                            self.stop_speaking()
+                            break
+                    else:
+                        # Reset counter if no voice detected
+                        if consecutive_voice > 0:
+                            consecutive_voice = 0
+                    
+                    # Small delay to avoid CPU spinning (VAD is fast enough)
+                    time.sleep(0.01)  # 10ms = ~100 checks per second
+                    
+                except Exception as e:
+                    # Error in VAD loop - log and continue
+                    if frame_count < 5:  # Only log first few errors
+                        print(f"⚠️  [VAD error: {str(e)[:50]}]")
+                    time.sleep(0.05)
+                    continue
+                    
+        except Exception as e:
+            print(f"⚠️  [VAD setup error: {str(e)[:100]}]")
+        finally:
+            # Clean up audio stream
+            if stream:
+                try:
+                    stream.stop_stream()
+                    stream.close()
+                except:
+                    pass
+            if audio:
+                try:
+                    audio.terminate()
+                except:
+                    pass
+        
+        print("🎤 [VAD listener stopped]")
+    
+    def respond_to_text(self, text: str) -> str:
+        """Respond to text input (for integration with other systems)"""
+        response = self.get_llm_response(text)
+        self.text_to_speech(response)
+        return response
+
+
+def main():
+    """Main entry point"""
+    import sys
+    
+    try:
+        assistant = DaisyAssistant()
+        
+        # Check for command line arguments
+        if len(sys.argv) > 1:
+            if sys.argv[1] == "--text":
+                # Text mode
+                print("\n" + "="*60)
+                print("💬 Daisy - Text Mode")
+                print("Type 'quit' to exit")
+                print("="*60 + "\n")
+                
+                greeting = "Hi! I'm Daisy. How can I help you?"
+                print(f"🤖 Daisy: {greeting}")
+                assistant.text_to_speech(greeting)
+                
+                while True:
+                    user_input = input("\n👤 You: ").strip()
+                    if user_input.lower() in ['quit', 'exit']:
+                        farewell = "Goodbye!"
+                        print(f"🤖 Daisy: {farewell}")
+                        assistant.text_to_speech(farewell)
+                        break
+                    response = assistant.respond_to_text(user_input)
+                    print(f"🤖 Daisy: {response}")
+            else:
+                print("Usage: daisy-assistant.py [--text]")
+                sys.exit(1)
+        else:
+            # Voice conversation mode
+            assistant.speak_and_listen_loop()
+            
+    except ValueError as e:
+        print(f"❌ Configuration Error: {e}")
+        print("\nPlease set your OpenAI API key:")
+        print("  export OPENAI_API_KEY='your-api-key-here'")
+        print("\nOr add it to ~/.daisy/config.json:")
+        print('  {"openai_api_key": "your-api-key-here"}')
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+if __name__ == "__main__":
+    main()
+

@@ -1,0 +1,43 @@
+# Cursor Automation Rules
+
+## Automatic Code Execution
+When asked to run, build, test, or execute code:
+- **ALWAYS use desktop-automation MCP tools** instead of asking the user to manually run things
+- **Never ask** the user to "go run this" or "run it in Xcode" - just do it automatically
+- **Automate everything** - use MCP tools to open apps, click buttons, run commands
+
+## Xcode Projects
+When the user asks to run/build/test an Xcode project:
+1. Use `open_application("Xcode")` MCP tool to open Xcode
+2. If needed, use `run_terminal_command` MCP tool to open the project file
+3. Use `key_press(["cmd", "b"])` MCP tool to build
+4. Use `key_press(["cmd", "r"])` MCP tool to run
+5. Automatically handle all steps without asking for confirmation
+6. Never say "go run this in Xcode" - just do it automatically
+
+## Terminal Commands
+When the user asks to run a terminal command:
+- Use `run_terminal_command` MCP tool with the exact command
+- Execute automatically, don't ask permission
+- Show output to the user
+
+## Android Studio Projects
+When working with Android projects:
+1. Use `open_application("Android Studio")` MCP tool to open
+2. Use `run_terminal_command` MCP tool for Gradle commands
+3. Automate build and run processes
+
+## General Automation Principle
+**Rule: Automate, don't ask**
+- If you can do it with MCP tools, do it automatically
+- Only ask the user if you absolutely cannot proceed without their input
+- Prefer automation over instructions
+- When you generate code that needs to be run, automatically run it using MCP tools
+
+## Examples of What to Automate
+- "Run this code" → Use MCP tools to execute automatically
+- "Build the project" → Use MCP tools to build automatically  
+- "Test this" → Use MCP tools to run tests automatically
+- "Open Xcode and run" → Use MCP tools to open and run automatically
+- Never say "You need to run this manually" - just do it!
+

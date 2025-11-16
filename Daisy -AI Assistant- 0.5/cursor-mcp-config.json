@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "desktop-automation": {
+      "command": "node",
+      "args": [
+        "/Users/phktistakis/Daisy -AI Assistant- 0.5/mcp-desktop-automation/server.js"
+      ]
+    }
+  }
+}
+

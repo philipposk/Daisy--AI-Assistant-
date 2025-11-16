@@ -1,0 +1,41 @@
+{
+  "rules": [
+    {
+      "pattern": ".*do you want (?:me to )?(?:to )?continue.*",
+      "action": "yes",
+      "description": "Always continue when asked"
+    },
+    {
+      "pattern": ".*step \\d+ out of \\d+.*",
+      "action": "continue",
+      "description": "Continue multi-step processes"
+    },
+    {
+      "pattern": ".*which option.*",
+      "action": "option_a",
+      "description": "Default to option A for choices"
+    },
+    {
+      "pattern": ".*how should (?:we|I) (?:proceed|continue).*",
+      "action": "continue",
+      "description": "Continue when asked how to proceed"
+    }
+  ],
+  "defaults": {
+    "continue": "yes",
+    "choice": "option_a",
+    "proceed": "continue"
+  },
+  "automation": {
+    "mode": "autonomous",
+    "description": "autonomous = execute automatically, preview = show actions before executing",
+    "preview_actions": true,
+    "auto_approve_patterns": [
+      "pod install",
+      "npm install",
+      "pip install",
+      "./gradlew build --refresh-dependencies"
+    ]
+  }
+}
+

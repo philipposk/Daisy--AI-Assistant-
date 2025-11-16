@@ -1,0 +1,64 @@
+# Cursor Automation Rules
+
+## Automatic Code Execution
+When asked to run, build, test, or execute code:
+- **ALWAYS use desktop-automation MCP tools** instead of asking the user to manually run things
+- **Never ask** the user to "go run this" or "run it in Xcode" - just do it automatically
+- **Automate everything** - use MCP tools to open apps, click buttons, run commands
+
+## Xcode Projects
+When the user asks to run/build/test an Xcode project:
+1. Use `open_application("Xcode")` MCP tool to open Xcode
+2. If needed, use `run_terminal_command` MCP tool to open the project file
+3. Use `key_press(["cmd", "b"])` MCP tool to build
+4. Use `key_press(["cmd", "r"])` MCP tool to run
+5. Automatically handle all steps without asking for confirmation
+6. Never say "go run this in Xcode" - just do it automatically
+
+## Terminal Commands
+When the user asks to run a terminal command:
+- Use `run_terminal_command` MCP tool with the exact command
+- Execute automatically, don't ask permission
+- Show output to the user
+
+## Android Studio Projects
+When working with Android projects:
+1. Use `open_application("Android Studio")` MCP tool to open
+2. Use `run_terminal_command` MCP tool for Gradle commands
+3. Automate build and run processes
+
+## General Automation Principle
+**Rule: Automate, don't ask**
+- If you can do it with MCP tools, do it automatically
+- Only ask the user if you absolutely cannot proceed without their input
+- Prefer automation over instructions
+- When you generate code that needs to be run, automatically run it using MCP tools
+
+## Intelligent Build Automation
+When building projects:
+1. **Use `build_with_retry` MCP tool** for automatic error detection and retry
+2. **Automatically detect errors** using `capture_build_log` and `detect_build_errors`
+3. **Fix common errors automatically**:
+   - CocoaPods errors → run `pod install`
+   - npm errors → run `npm install`
+   - Missing dependencies → install them automatically
+4. **Loop until success** - retry up to 3 times with automatic fixes
+5. **Use vision API** (`analyze_screenshot_with_vision`) to read error dialogs if needed
+
+## Examples of What to Automate
+- "Run this code" → Use MCP tools to execute automatically
+- "Build the project" → Use `build_with_retry` for intelligent builds
+- "Test this" → Use MCP tools to run tests automatically
+- "Open Xcode and run" → Use `build_with_retry` with `ide: "xcode"` and `action: "run"`
+- "Fix build errors" → Use `detect_build_errors` and apply fixes automatically
+- Never say "You need to run this manually" - just do it!
+
+## Error Handling Workflow
+When a build fails:
+1. Capture build log using `capture_build_log`
+2. Detect errors using `detect_build_errors`
+3. Apply suggested fixes automatically (pod install, npm install, etc.)
+4. Retry build using `build_with_retry`
+5. Repeat until success or max retries reached
+6. Report final status to user
+

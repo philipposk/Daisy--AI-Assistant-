@@ -1,0 +1,30 @@
+{
+  "rules": [
+    {
+      "pattern": ".*do you want (?:me to )?(?:to )?continue.*",
+      "action": "yes",
+      "description": "Always continue when asked"
+    },
+    {
+      "pattern": ".*step \\d+ out of \\d+.*",
+      "action": "continue",
+      "description": "Continue multi-step processes"
+    },
+    {
+      "pattern": ".*which option.*",
+      "action": "option_a",
+      "description": "Default to option A for choices"
+    },
+    {
+      "pattern": ".*how should (?:we|I) (?:proceed|continue).*",
+      "action": "continue",
+      "description": "Continue when asked how to proceed"
+    }
+  ],
+  "defaults": {
+    "continue": "yes",
+    "choice": "option_a",
+    "proceed": "continue"
+  }
+}
+
