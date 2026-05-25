@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Daisy runtime
+~/.daisy/
+*.log
+audit.log
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
