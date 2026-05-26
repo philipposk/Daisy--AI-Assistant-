@@ -19,6 +19,11 @@ venv/
 *.log
 audit.log
 
+# Per-user run scripts that often contain real secrets — keep local only.
+# Use the redacted START_INTERACTIVE_template.sh as a starting point.
+START_INTERACTIVE.sh
+**/START_INTERACTIVE.sh
+
 # Test artifacts
 .pytest_cache/
 .coverage
