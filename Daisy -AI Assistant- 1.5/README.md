@@ -1,192 +1,122 @@
-# Daisy Assistant 1.1
+# Daisy 1.5 — Your Mac voice assistant
 
-A structured AI assistant with action planning, safety guardrails, and typed schemas.
+Daisy is a voice assistant that runs entirely on your Mac. You talk to her, she does
+things for you — write notes, manage your calendar and email, remember facts about
+you, and stay out of your way the rest of the time.
 
-## Architecture
+---
 
-Daisy 0.6 implements a clean service architecture with typed contracts:
+## What Daisy can do (plain English)
 
-```
-┌──────────────┐
-│ Voice Input  │ (Microphone or Audio File)
-└──────┬───────┘
-       │
-       ▼
-┌──────────────────┐
-│  Voice Service   │ (STT: OpenAI/Groq/Local HTTP)
-└──────┬───────────┘
-       │ TranscriptionResult
-       ▼
-┌──────────────────┐
-│  Brain Service   │ (LLM: OpenAI/Groq/Local HTTP)
-└──────┬───────────┘
-       │ AssistantIntent (with AssistantActions)
-       ▼
-┌──────────────────┐
-│ Safety Checker   │ (Whitelists, Blocklists, Permissions)
-└──────┬───────────┘
-       │
-       ▼
-┌──────────────────┐
-│ Action Dispatcher│ (Execute: Note, Task, Reminder, Command)
-└──────┬───────────┘
-       │
-       ▼
-┌──────────────────┐
-│ Action Service   │ (Creates notes, tasks, reminders, runs commands)
-└──────────────────┘
-```
+### Talk to her like a person
+- **Say "Daisy"** — she wakes up and listens.
+- **Just start talking** — she figures out when you're done; no button-mashing.
+- **Interrupt her mid-sentence** — say "stop" and she stops talking.
+- She filters out background-noise transcription junk so she doesn't act on
+  garbled audio.
 
-## Features
+### Get things done with your voice
+- **"Make a note about pasta recipes"** → markdown file in your notes folder.
+- **"Add 'buy milk' to my tasks"** → goes in your tasks list AND your Mac's Reminders app.
+- **"Remind me to drink water in 2 hours"** → real Mac notification + spoken reminder
+  when the time comes.
+- **"What's on my calendar today?"** → reads from Apple Calendar.
+- **"Schedule a dentist appointment Tuesday 3 PM"** → creates the event in your calendar.
+- **"Email Alice that I'll be late"** → drafts (or sends) email via Mail.app.
+- **"Open Xcode and build the current project"** → controls apps on your desktop.
 
-### ✅ Service Architecture
-- **VoiceService**: STT with local/cloud fallback
-- **BrainService**: Action planner with JSON schema output
-- **ActionService**: Dispatcher for structured actions
-- **SafetyChecker**: Permission layer with whitelists/blocklists
+### She remembers you
+- Tell her once: *"I prefer Python for scripting"* — she'll remember next time.
+- She auto-summarizes old conversations so she keeps context without burning
+  tokens on every reply.
+- Search what she remembers: *"What do you know about my hobbies?"*
 
-### ✅ Typed Contracts (Pydantic)
-- `TranscriptionResult`: STT output
-- `AssistantIntent`: Structured intent with actions
-- `AssistantAction`: Union of action types (create_note, create_task, create_reminder, run_command, conversation)
-- `ActionResult`: Execution results
+### Safety net built-in
+- **"Undo that"** — actually undoes the last note/task/reminder/memory she created.
+- **Audit log** — every action is logged; nothing happens silently.
+- **Confirmation prompts** — for anything risky (running commands, deleting files),
+  she asks first. If you're not there to answer, she does nothing.
+- **API keys live in your Mac Keychain** — not in plain-text config files.
 
-### ✅ Action Types
-- **CreateNote**: Write markdown notes to configured directory
-- **CreateTask**: Append to tasks file + SQLite database
-- **CreateReminder**: Save reminders with timestamps
-- **RunCommand**: Execute terminal commands (with safety checks)
-- **Conversation**: Natural conversation responses
+### Looks like a real Mac app
+- **Web UI** at `http://localhost:5188/` — chat-style, streams her reply as she types.
+- **Menu-bar icon** — quick status (Listening / Speaking / Idle) and one-click "open".
+- **Auto-start on login** — one command, runs in the background forever.
+- **Permission helper** — guides you through Mic / Accessibility / Screen-recording
+  permissions if Daisy needs them.
 
-### ✅ Safety & Permissions
-- Whitelisted commands and directories
-- Blocked command patterns (rm -rf, etc.)
-- Confirmation requirements for dangerous actions
-- Network/system-modifying command blocking
+---
 
-### ✅ Audit Logging
-- Append-only audit log (JSONL format)
-- Logs all transcriptions, intents, actions, and executions
-- Timestamped entries for full audit trail
+## What's under the hood (short technical summary)
 
-### ✅ Configuration
-- YAML/JSON config support
-- Environment variable overrides
-- Local-first endpoints (with cloud fallback)
-- Configurable paths, models, and providers
+| Layer | How it works |
+|-------|--------------|
+| **Speech-to-text** | OpenAI Whisper API, or local `faster-whisper` via RealtimeSTT (streaming partials + Silero VAD) |
+| **Wake word** | openWakeWord (offline, custom "daisy" model) OR Whisper-polling fallback |
+| **LLM brain** | OpenAI / Anthropic / Groq / local Ollama — configurable provider chain with retry + fallback |
+| **Action planning** | Pydantic-typed JSON output → dispatcher → safety check → executor |
+| **Text-to-speech** | OpenAI TTS / Kokoro-ONNX (local) / Piper (local) / macOS `say` |
+| **Persistence** | SQLite (tasks, conversation history, long-term memory) + JSON (reminders) + Markdown (notes, tasks) |
+| **Backend** | FastAPI + uvicorn, port 5188, SSE for streaming, WebSocket for live transcript |
+| **Frontend** | Single-page HTML (no build step), `EventSource` for typewriter streaming |
+| **macOS integrations** | AppleScript via `osascript` — Calendar, Reminders, Mail, notifications |
+| **MCP** | Daisy IS an MCP server (`listen`, `speak`, `notify`, `confirm`); also CONSUMES MCP servers (desktop-automation 12 tools, computer-use fallback) |
+| **Secrets** | macOS Keychain via `security` CLI — no pip dep |
+| **Tests** | 198/198 passing, mocked subprocess + filesystem; no real network in CI |
 
-### ✅ Persistence
-- SQLite database for tasks and conversation memory
-- Markdown tasks file (human-readable)
-- JSON reminders file
-- Conversation history with configurable retention
+**Architecture:** Voice → Brain → Safety → Dispatch → Executor → TTS, plus a parallel
+Memory + Summarizer feed into the Brain context window.
 
-## Installation
+---
+
+## Quick start
 
 ```bash
-cd "Daisy -AI Assistant- 0.6"
+cd "Daisy -AI Assistant- 1.5"
 ./setup.sh
+
+# Add your OpenAI key (recommended: Keychain, not env var):
+python3 -c "from services.keychain import set_secret; set_secret('OPENAI_API_KEY', 'sk-...')"
+
+# Start the backend + UI:
+python3 daisy_app.py --port 5188 --no-ui
+open http://localhost:5188/
+
+# Or run with a native window:
+python3 daisy_app.py --port 5188
+
+# Or as a menu-bar app:
+python3 daisy_menubar.py
+
+# (Optional) auto-start on login:
+python3 tools/launchd_setup.py install
+
+# Run tests:
+python3 tests/run_tests.py
 ```
 
-## Configuration
+---
 
-Create/edit `~/.daisy/config.yaml`:
+## Project history
 
-```yaml
-stt:
-  provider: "openai"  # openai, google, local_http
-  openai_api_key: null  # Set via OPENAI_API_KEY env var
-  
-llm:
-  provider: "openai"  # openai, groq, local_http
-  model: "gpt-4"
-  openai_api_key: null  # Set via OPENAI_API_KEY env var
-  
-tts:
-  provider: "openai"
-  voice: "nova"
-  
-safety:
-  whitelisted_commands: []
-  whitelisted_directories: []
-  blocked_commands:
-    - "rm -rf"
-    - "del /f"
-  require_confirmation_for:
-    - "rm"
-    - "del"
-    
-paths:
-  notes_directory: "~/.daisy/notes"
-  tasks_file: "~/.daisy/tasks.md"
-  reminders_file: "~/.daisy/reminders.json"
-  audit_log: "~/.daisy/audit.log"
-  database_path: "~/.daisy/daisy.db"
-```
+Daisy has shipped 11 releases (0.5 → 1.5). See [CHANGELOG.md](CHANGELOG.md) for
+the full feature-by-feature breakdown, each entry written in plain English first
+and then in technical detail.
 
-## Usage
+---
 
-### Voice Mode (Interactive)
-```bash
-python3 daisy.py
-```
+## Requirements
 
-### Text Mode (Interactive)
-```bash
-python3 daisy.py --text
-```
+- macOS (Apple Silicon or Intel)
+- Python 3.10+
+- ~200 MB disk for dependencies (more if you enable local Whisper / Kokoro)
+- At least one of: OpenAI / Anthropic / Groq API key, OR a local Ollama server
 
-### Process Text (One-shot)
-```bash
-python3 daisy.py --input "Create a note about Python best practices"
-```
+---
 
-### Process Audio File
-```bash
-python3 daisy.py --audio recording.wav
-```
+## Privacy
 
-## What's New in 0.6
-
-### Structured Action Planning
-- LLM outputs validated JSON schemas
-- Actions are typed (Pydantic models)
-- Clear separation between conversation and actions
-
-### Safety First
-- Command whitelisting
-- Directory restrictions
-- Confirmation requirements
-- Audit logging of all decisions
-
-### Local-First
-- Support for local HTTP endpoints (STT, LLM, TTS)
-- Fallback to cloud providers
-- Configurable provider chain
-
-### Better Architecture
-- Service modules (voice, brain, action)
-- Clean boundaries between components
-- Testable, modular design
-
-## Differences from 0.5
-
-**0.5**: Monolithic `daisy-assistant.py` with free-form LLM responses
-**0.6**: Structured services with typed action schemas and safety guardrails
-
-**0.5**: Manual conversation handling
-**0.6**: Action planner with structured outputs (notes, tasks, reminders, commands)
-
-**0.5**: Basic automation hooks
-**0.6**: Full action dispatcher with safety checks and audit logging
-
-## Next Steps
-
-- [ ] Add confirmation prompts for dangerous actions
-- [ ] Implement calendar integration for reminders
-- [ ] Add test harness with golden tests
-- [ ] Support for more action types
-- [ ] Web UI for viewing tasks/notes
-- [ ] Voice interrupt handling
-- [ ] Better error recovery
-
+- Everything except STT/LLM/TTS API calls runs locally.
+- Switch to local-only mode by setting providers to `local_http` / `piper` / `whisper`.
+- API keys go in your Mac Keychain by default.
+- Audit log + memory DB live in `~/.daisy/` and never leave your machine.
