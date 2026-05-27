@@ -6,7 +6,7 @@ you, and stay out of your way the rest of the time.
 
 ---
 
-## What Daisy can do (plain English)
+## What Daisy can do
 
 ### Talk to her like a person
 - **Say "Daisy"** — she wakes up and listens.
@@ -47,7 +47,7 @@ you, and stay out of your way the rest of the time.
 
 ---
 
-## What's under the hood (short technical summary)
+## Under the hood
 
 | Layer | How it works |
 |-------|--------------|
@@ -99,9 +99,7 @@ python3 tests/run_tests.py
 
 ## Project history
 
-Daisy has shipped 11 releases (0.5 → 1.5). See [CHANGELOG.md](CHANGELOG.md) for
-the full feature-by-feature breakdown, each entry written in plain English first
-and then in technical detail.
+Daisy has shipped 11 releases (0.5 → 1.5). See [CHANGELOG.md](CHANGELOG.md) for the full feature-by-feature breakdown.
 
 ---
 

@@ -1,7 +1,6 @@
 # Daisy Assistant — Changelog
 
-Each release starts with a plain-English summary (what changed for you, the user),
-followed by the technical details.
+Each release starts with a summary of what changed for the user, followed by technical details.
 
 ---
 
