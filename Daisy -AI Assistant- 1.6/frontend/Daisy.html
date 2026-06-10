@@ -1,0 +1,1911 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Daisy — AI Assistant</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #f6f3ec;          /* warm paper */
+    --surface: #fbfaf6;     /* card */
+    --surface-2: #efeae0;   /* recessed */
+    --ink: #1d1b18;         /* near-black */
+    --ink-2: #4a463e;       /* secondary */
+    --ink-3: #6f6a5e;       /* tertiary */
+    --line: #e4ddcf;        /* hairline */
+    --line-2: #d4ccba;
+    --accent: #e8b923;      /* daisy yellow */
+    --accent-soft: #fef1c4;
+    --accent-ink: #6a4e09;
+    --good: #4f8a4f;
+    --bad: #c5503b;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: 'ss01', 'cv11';
+  }
+  button { font-family: inherit; color: inherit; }
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  /* --------- App shell --------- */
+  .app {
+    height: 100vh;
+    display: grid;
+    grid-template-columns: 304px 1fr;
+    grid-template-rows: 52px 1fr;
+    grid-template-areas:
+      "topbar topbar"
+      "side   main";
+    background: var(--bg);
+  }
+
+  /* --------- Topbar --------- */
+  .topbar {
+    grid-area: topbar;
+    display: flex;
+    align-items: center;
+    padding: 0 18px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg);
+    gap: 14px;
+    position: relative;
+  }
+  .traffic {
+    display: flex;
+    gap: 8px;
+    margin-right: 6px;
+  }
+  .traffic span {
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--line-2);
+  }
+  .traffic span:nth-child(1) { background: #e76d63; }
+  .traffic span:nth-child(2) { background: #e9b14a; }
+  .traffic span:nth-child(3) { background: #66b56a; }
+
+  .brand {
+    display: flex; align-items: center; gap: 9px;
+    font-family: 'Instrument Serif', serif;
+    font-size: 22px;
+    letter-spacing: -0.01em;
+  }
+  .brand .ver {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: var(--ink-3);
+    background: var(--surface-2);
+    border-radius: 4px;
+    padding: 2px 6px;
+    margin-left: 2px;
+    align-self: center;
+    letter-spacing: 0;
+  }
+
+  .topbar-center {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+  }
+  .listening {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    padding: 5px 12px 5px 8px;
+    border-radius: 100px;
+    font-size: 12.5px;
+    color: var(--ink-2);
+  }
+  .pulse {
+    position: relative;
+    width: 8px; height: 8px;
+    background: var(--good); border-radius: 50%;
+  }
+  .pulse.off { background: var(--line-2); }
+  .pulse.off::after { display: none; }
+  .pulse::after {
+    content: '';
+    position: absolute; inset: -4px;
+    border-radius: 50%;
+    background: var(--good); opacity: 0.35;
+    animation: pulse 1.8s ease-out infinite;
+  }
+  @keyframes pulse {
+    0% { transform: scale(0.6); opacity: 0.5; }
+    100% { transform: scale(1.7); opacity: 0; }
+  }
+  .listening kbd {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    background: var(--surface-2);
+    border-radius: 4px;
+    padding: 1px 5px;
+    color: var(--ink-2);
+    border: 1px solid var(--line);
+  }
+
+  .topbar-right {
+    display: flex; align-items: center; gap: 4px;
+  }
+  .icon-btn {
+    width: 30px; height: 30px;
+    display: grid; place-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: 7px;
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+  .icon-btn:hover { background: var(--surface-2); }
+  .avatar {
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #e8b923, #c98a2a);
+    color: #fff8e0;
+    display: grid; place-items: center;
+    font-size: 11px;
+    font-weight: 600;
+    margin-left: 6px;
+  }
+
+  /* --------- Sidebar --------- */
+  .sidebar {
+    grid-area: side;
+    border-right: 1px solid var(--line);
+    padding: 14px 12px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    overflow: hidden;
+  }
+  .new-task {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--ink);
+    color: var(--bg);
+    border: 0;
+    height: 36px;
+    border-radius: 9px;
+    padding: 0 12px 0 10px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 120ms;
+  }
+  .new-task:hover { background: #2c2924; }
+  .new-task .plus {
+    width: 18px; height: 18px;
+    border-radius: 5px;
+    background: var(--accent);
+    color: var(--ink);
+    display: grid; place-items: center;
+    font-size: 14px; font-weight: 700;
+    line-height: 1;
+  }
+  .new-task .kbd {
+    margin-left: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: rgba(255,255,255,0.5);
+  }
+
+  .search {
+    position: relative;
+  }
+  .search input {
+    width: 100%;
+    height: 32px;
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 0 10px 0 32px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--ink);
+    outline: none;
+  }
+  .search input::placeholder { color: var(--ink-3); }
+  .search input:focus { border-color: var(--ink-3); }
+  .search svg {
+    position: absolute;
+    left: 10px; top: 50%;
+    transform: translateY(-50%);
+    color: var(--ink-3);
+  }
+
+  .tasks {
+    flex: 1;
+    overflow-y: auto;
+    margin: 0 -4px;
+    padding: 0 4px;
+  }
+  .tasks::-webkit-scrollbar { width: 6px; }
+  .tasks::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 3px; }
+
+  .section-label {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    padding: 14px 8px 6px;
+  }
+  .section-label:first-child { padding-top: 4px; }
+
+  .task {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+  }
+  .task:hover { background: var(--surface); }
+  .task .task-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 9px 4px 9px 10px;
+    background: transparent;
+    border: 0;
+    text-align: left;
+    cursor: default;
+    font: inherit;
+    border-radius: 8px;
+  }
+  .task .row {
+    display: flex; align-items: center; gap: 8px;
+    justify-content: space-between;
+  }
+  .task .title {
+    font-size: 13px;
+    color: var(--ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+  }
+  .task.done .title { color: var(--ink-3); text-decoration: line-through; }
+  .task .meta {
+    font-size: 11px;
+    color: var(--ink-3);
+    flex-shrink: 0;
+  }
+  .task .sub {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    display: flex; align-items: center; gap: 6px;
+    text-align: left;
+  }
+  .task-check {
+    flex-shrink: 0;
+    width: 24px; height: 24px;
+    margin-right: 6px;
+    border-radius: 7px;
+    border: 1.5px solid var(--line-2);
+    background: var(--surface);
+    display: grid; place-items: center;
+    cursor: pointer;
+    color: transparent;
+    font-size: 12px;
+    line-height: 1;
+  }
+  .task-check:hover { border-color: var(--good); color: var(--good); }
+  .task.done .task-check {
+    background: var(--good);
+    border-color: var(--good);
+    color: #fff;
+    cursor: default;
+  }
+  .tasks-empty {
+    padding: 14px 10px;
+    font-size: 12.5px;
+    color: var(--ink-3);
+  }
+
+  .sidebar-footer {
+    border-top: 1px solid var(--line);
+    padding-top: 10px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .voice-meter {
+    display: flex; align-items: end; gap: 2px;
+    height: 12px;
+  }
+  .voice-meter span {
+    width: 2px;
+    background: var(--accent);
+    border-radius: 1px;
+    animation: bar 1.1s ease-in-out infinite;
+  }
+  .voice-meter span:nth-child(1) { height: 40%; animation-delay: 0.0s; }
+  .voice-meter span:nth-child(2) { height: 70%; animation-delay: 0.1s; }
+  .voice-meter span:nth-child(3) { height: 100%; animation-delay: 0.2s; }
+  .voice-meter span:nth-child(4) { height: 60%; animation-delay: 0.3s; }
+  .voice-meter span:nth-child(5) { height: 80%; animation-delay: 0.4s; }
+  .voice-meter span:nth-child(6) { height: 30%; animation-delay: 0.5s; }
+  @keyframes bar {
+    0%, 100% { transform: scaleY(0.4); }
+    50% { transform: scaleY(1); }
+  }
+
+  .status-row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11.5px;
+    color: var(--ink-2);
+    padding: 0 4px;
+  }
+  .status-row .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--good); }
+
+  /* --------- Main --------- */
+  .main {
+    grid-area: main;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--bg);
+  }
+
+  .task-header {
+    padding: 28px 56px 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  .task-header h1 {
+    font-family: 'Instrument Serif', serif;
+    font-size: 30px;
+    font-weight: 400;
+    margin: 0 0 8px;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+  }
+  .task-header .crumbs {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 12px;
+    color: var(--ink-3);
+  }
+  .crumbs .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 100px;
+    padding: 2px 9px 2px 7px;
+    color: var(--ink-2);
+    font-size: 11.5px;
+  }
+  .crumbs .chip .swatch {
+    width: 8px; height: 8px; border-radius: 50%;
+  }
+
+  .thread {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px 56px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .thread::-webkit-scrollbar { width: 8px; }
+  .thread::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 4px; }
+
+  .thread-empty {
+    margin: auto;
+    text-align: center;
+    color: var(--ink-3);
+    font-size: 13.5px;
+    max-width: 360px;
+  }
+  .thread-empty .daisy-mark { width: 34px; height: 34px; margin-bottom: 10px; }
+
+  .msg { display: flex; gap: 14px; max-width: 880px; }
+  .msg .gutter {
+    width: 28px; flex-shrink: 0;
+    display: flex; flex-direction: column; align-items: center;
+    padding-top: 2px;
+  }
+  .gutter .avatar-sm {
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    display: grid; place-items: center;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .gutter .avatar-sm.you {
+    background: var(--surface-2);
+    color: var(--ink-2);
+  }
+  .gutter .avatar-sm.daisy {
+    background: var(--accent);
+    color: var(--ink);
+  }
+  .gutter .avatar-sm.system {
+    background: transparent;
+    border: 1px dashed var(--line-2);
+    color: var(--ink-3);
+  }
+  .msg .body { flex: 1; min-width: 0; }
+  .msg .who {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: 4px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .msg .who .when { font-weight: 400; color: var(--ink-3); font-size: 11px; }
+  .msg .text { font-size: 14.5px; color: var(--ink); line-height: 1.6; white-space: pre-wrap; overflow-wrap: break-word; }
+  .msg.system .text { font-size: 13px; color: var(--ink-2); }
+  .msg.system .who { color: var(--ink-3); }
+
+  .running-pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 5px 10px 5px 9px;
+    border-radius: 100px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    color: var(--ink-2);
+    font-size: 12px;
+  }
+  .running-pill .ring {
+    width: 10px; height: 10px;
+    border: 1.5px solid var(--line-2);
+    border-top-color: var(--ink-2);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* --------- Banners --------- */
+  .top-banner {
+    position: fixed;
+    top: 10px; left: 50%;
+    transform: translateX(-50%);
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    box-shadow: 0 4px 14px rgba(0,0,0,.12);
+    z-index: 9999;
+    display: flex; gap: 10px; align-items: center;
+  }
+  .top-banner.warn { background: var(--accent); color: var(--accent-ink); }
+  .top-banner.offline { background: var(--ink); color: var(--bg); }
+  .top-banner button {
+    border: 0;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    font-size: 12.5px;
+  }
+  .top-banner.warn .primary { background: var(--ink); color: #fff; }
+  .top-banner.offline .primary { background: var(--accent); color: var(--ink); }
+  .top-banner .ghost {
+    background: transparent;
+    border: 1px solid rgba(127,127,127,.4);
+    color: inherit;
+    padding: 6px 10px;
+  }
+
+  /* --------- Composer --------- */
+  .composer-wrap {
+    padding: 16px 56px 22px;
+    border-top: 1px solid var(--line);
+    background: var(--bg);
+  }
+  .composer {
+    max-width: 920px;
+    margin: 0 auto;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: 0 1px 0 rgba(0,0,0,0.02), 0 8px 24px -16px rgba(0,0,0,0.12);
+    transition: border-color 120ms;
+  }
+  .composer:focus-within { border-color: var(--ink-3); }
+  .composer textarea {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    resize: none;
+    padding: 14px 16px 6px;
+    font: inherit;
+    font-size: 14.5px;
+    color: var(--ink);
+    outline: none;
+    line-height: 1.5;
+    min-height: 24px;
+    max-height: 200px;
+    font-family: inherit;
+  }
+  .composer textarea::placeholder { color: var(--ink-3); }
+  .composer-row {
+    display: flex; align-items: center; gap: 4px;
+    padding: 6px 8px 8px;
+  }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 9px 4px 8px;
+    border-radius: 7px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--ink-2);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .pill:hover { background: var(--surface-2); }
+  .pill:disabled { color: var(--ink-3); cursor: default; background: transparent; }
+  .pill.has-border { border-color: var(--line); }
+  .pill svg { color: var(--ink-3); }
+  .pill .count {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    background: var(--surface-2);
+    border-radius: 4px;
+    padding: 0 5px;
+    color: var(--ink-2);
+  }
+  .composer-row .spacer { flex: 1; }
+
+  .mic {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 0;
+    display: grid; place-items: center;
+    color: var(--ink);
+    cursor: pointer;
+    position: relative;
+    box-shadow: 0 0 0 0 rgba(232, 185, 35, 0.4);
+    animation: micPulse 2.2s ease-out infinite;
+  }
+  .mic:disabled { animation: none; background: var(--line-2); color: var(--ink-3); cursor: default; }
+  @keyframes micPulse {
+    0%   { box-shadow: 0 0 0 0 rgba(232, 185, 35, 0.45); }
+    70%  { box-shadow: 0 0 0 10px rgba(232, 185, 35, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(232, 185, 35, 0); }
+  }
+  .mic.recording { background: var(--bad); color: #fff; animation: none; }
+  .send {
+    width: 32px; height: 32px;
+    border-radius: 8px;
+    background: var(--ink);
+    color: var(--bg);
+    border: 0;
+    display: grid; place-items: center;
+    cursor: pointer;
+    margin-left: 4px;
+  }
+  .send:hover { background: #2c2924; }
+  .send:disabled { background: var(--line-2); color: var(--ink-3); cursor: default; }
+
+  .composer-hint {
+    max-width: 920px;
+    margin: 8px auto 0;
+    font-size: 11.5px;
+    color: var(--ink-3);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .composer-hint kbd {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    background: var(--surface);
+    border-radius: 4px;
+    padding: 1px 5px;
+    border: 1px solid var(--line);
+    color: var(--ink-2);
+  }
+
+  /* Daisy mark */
+  .daisy-mark {
+    width: 24px; height: 24px;
+    flex-shrink: 0;
+  }
+
+  /* --------- Slide-over panel (settings / keys / memory / log) --------- */
+  .slideover-backdrop {
+    position: fixed; inset: 0;
+    background: rgba(29, 27, 24, 0.28);
+    z-index: 100;
+  }
+  .slideover {
+    position: fixed;
+    top: 0; right: 0; bottom: 0;
+    width: min(440px, 92vw);
+    background: var(--surface);
+    border-left: 1px solid var(--line);
+    box-shadow: -16px 0 40px -24px rgba(0,0,0,.3);
+    z-index: 101;
+    display: flex;
+    flex-direction: column;
+  }
+  .slideover-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 16px 18px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .slideover-head h2 {
+    font-family: 'Instrument Serif', serif;
+    font-weight: 400;
+    font-size: 21px;
+    margin: 0;
+    flex: 1;
+  }
+  .slideover-tabs {
+    display: flex; gap: 4px;
+    padding: 10px 14px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .slideover-tabs button {
+    background: transparent;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    padding: 6px 10px 9px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--ink-3);
+    cursor: pointer;
+  }
+  .slideover-tabs button:hover { color: var(--ink); }
+  .slideover-tabs button[aria-selected="true"] {
+    color: var(--ink);
+    border-bottom-color: var(--accent);
+  }
+  .slideover-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 18px 24px;
+  }
+  .slideover-body::-webkit-scrollbar { width: 6px; }
+  .slideover-body::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 3px; }
+
+  .panel-note {
+    font-size: 12px;
+    color: var(--ink-3);
+    margin: 0 0 14px;
+  }
+  .panel-status {
+    font-size: 12.5px;
+    margin: 12px 0 0;
+    padding: 8px 10px;
+    border-radius: 7px;
+    display: none;
+  }
+  .panel-status.show { display: block; }
+  .panel-status.ok { background: var(--accent-soft); color: var(--accent-ink); }
+  .panel-status.err { background: #fbe4df; color: var(--bad); }
+
+  .field {
+    display: flex; flex-direction: column; gap: 4px;
+    margin-bottom: 13px;
+  }
+  .field label {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--ink-2);
+  }
+  .field input[type="text"], .field input[type="password"], .field select {
+    height: 32px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--bg);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+    padding: 0 9px;
+  }
+  .field-row {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 11px;
+    font-size: 13px;
+  }
+  .field-row input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--accent); }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--ink);
+    color: var(--bg);
+    border: 0;
+    border-radius: 8px;
+    height: 32px;
+    padding: 0 14px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .btn:hover { background: #2c2924; }
+  .btn:disabled { background: var(--line-2); color: var(--ink-3); cursor: default; }
+  .btn.subtle {
+    background: var(--surface-2);
+    color: var(--ink-2);
+  }
+  .btn.subtle:hover { background: var(--line); }
+  .btn.danger { background: transparent; color: var(--bad); border: 1px solid var(--line); }
+  .btn.danger:hover { background: #fbe4df; }
+  .btn.small { height: 26px; padding: 0 10px; font-size: 12px; }
+
+  .kv-card {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--bg);
+    padding: 11px 12px;
+    margin-bottom: 10px;
+  }
+  .kv-card .kv-head {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 6px;
+  }
+  .kv-card .kv-name {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--ink);
+    flex: 1;
+    overflow-wrap: anywhere;
+  }
+  .kv-card .kv-state {
+    font-size: 11px;
+    border-radius: 100px;
+    padding: 1px 8px;
+    flex-shrink: 0;
+  }
+  .kv-card .kv-state.set { background: #e4efe4; color: var(--good); }
+  .kv-card .kv-state.unset { background: var(--surface-2); color: var(--ink-3); }
+  .kv-card .kv-row { display: flex; gap: 6px; }
+  .kv-card .kv-row input {
+    flex: 1;
+    min-width: 0;
+    height: 28px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--surface);
+    color: var(--ink);
+    font: inherit;
+    font-size: 12.5px;
+    padding: 0 8px;
+  }
+  .kv-card .kv-content {
+    font-size: 13px;
+    color: var(--ink-2);
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    margin-bottom: 8px;
+  }
+
+  .log-entry {
+    border-bottom: 1px solid var(--line);
+    padding: 8px 2px;
+    font-size: 12.5px;
+  }
+  .log-entry:last-child { border-bottom: 0; }
+  .log-entry .log-top {
+    display: flex; align-items: baseline; gap: 8px;
+    margin-bottom: 2px;
+  }
+  .log-entry .log-type {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    background: var(--surface-2);
+    border-radius: 4px;
+    padding: 1px 6px;
+    color: var(--ink-2);
+  }
+  .log-entry .log-when {
+    font-size: 11px;
+    color: var(--ink-3);
+    margin-left: auto;
+    white-space: nowrap;
+  }
+  .log-entry .log-summary {
+    color: var(--ink-2);
+    overflow-wrap: anywhere;
+  }
+  .panel-empty {
+    color: var(--ink-3);
+    font-size: 13px;
+    padding: 8px 2px;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- =================== TOPBAR =================== -->
+  <header class="topbar">
+    <div class="traffic"><span></span><span></span><span></span></div>
+    <div class="brand">
+      <svg class="daisy-mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <g fill="#fbfaf6" stroke="#1d1b18" stroke-width="0.9">
+          <ellipse cx="12" cy="4.5" rx="2.2" ry="3.4" />
+          <ellipse cx="12" cy="19.5" rx="2.2" ry="3.4" />
+          <ellipse cx="4.5" cy="12" rx="3.4" ry="2.2" />
+          <ellipse cx="19.5" cy="12" rx="3.4" ry="2.2" />
+          <ellipse cx="6.7" cy="6.7" rx="2.2" ry="3.2" transform="rotate(-45 6.7 6.7)" />
+          <ellipse cx="17.3" cy="6.7" rx="2.2" ry="3.2" transform="rotate(45 17.3 6.7)" />
+          <ellipse cx="6.7" cy="17.3" rx="2.2" ry="3.2" transform="rotate(45 6.7 17.3)" />
+          <ellipse cx="17.3" cy="17.3" rx="2.2" ry="3.2" transform="rotate(-45 17.3 17.3)" />
+        </g>
+        <circle cx="12" cy="12" r="3.2" fill="#e8b923" stroke="#1d1b18" stroke-width="0.9" />
+      </svg>
+      Daisy
+      <span class="ver" id="verBadge">v1.6</span>
+    </div>
+
+    <div class="topbar-center">
+      <div class="listening" id="listeningPill" title="Wake word listening">
+        <span class="pulse" id="listeningPulse"></span>
+        <span id="listeningText">Listening for <kbd>"Hey Daisy"</kbd></span>
+      </div>
+    </div>
+
+    <div class="topbar-right">
+      <button class="icon-btn" id="memoryBtn" title="What Daisy remembers" aria-label="Memory">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a4 4 0 0 0-4 4 4 4 0 0 0-3 6.6A4 4 0 0 0 8 21h8a4 4 0 0 0 3-7.4A4 4 0 0 0 16 7a4 4 0 0 0-4-4z"/><path d="M12 3v18"/></svg>
+      </button>
+      <button class="icon-btn" id="logBtn" title="Activity log" aria-label="Activity log">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>
+      </button>
+      <button class="icon-btn" id="settingsBtn" title="Settings" aria-label="Settings" aria-haspopup="dialog">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
+      <div class="avatar">P</div>
+    </div>
+  </header>
+
+  <!-- =================== SIDEBAR =================== -->
+  <aside class="sidebar">
+    <button class="new-task" id="newTaskBtn">
+      <span class="plus">+</span>
+      New task
+      <span class="kbd">⌘ K</span>
+    </button>
+
+    <div class="search">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3-3"/></svg>
+      <input id="taskSearch" placeholder="Search tasks…" aria-label="Search tasks" />
+    </div>
+
+    <div class="tasks" id="taskList" role="list" aria-label="Tasks">
+      <div class="tasks-empty">Loading tasks…</div>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="status-row">
+        <span class="dot"></span>
+        <span id="statusModel">connecting…</span>
+      </div>
+      <div class="status-row">
+        <div class="voice-meter" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <span id="statusVoice">voice</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- =================== MAIN =================== -->
+  <main class="main">
+
+    <div class="task-header">
+      <h1>Conversation</h1>
+      <div class="crumbs">
+        <span class="chip"><span class="swatch" style="background:#e8b923"></span> Local assistant</span>
+        <span class="chip" id="providerChip">providers: …</span>
+      </div>
+    </div>
+
+    <div class="thread" id="thread" aria-live="polite">
+      <div class="thread-empty" id="threadEmpty">
+        <svg class="daisy-mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <g fill="#fbfaf6" stroke="#1d1b18" stroke-width="0.9">
+            <ellipse cx="12" cy="4.5" rx="2.2" ry="3.4" />
+            <ellipse cx="12" cy="19.5" rx="2.2" ry="3.4" />
+            <ellipse cx="4.5" cy="12" rx="3.4" ry="2.2" />
+            <ellipse cx="19.5" cy="12" rx="3.4" ry="2.2" />
+            <ellipse cx="6.7" cy="6.7" rx="2.2" ry="3.2" transform="rotate(-45 6.7 6.7)" />
+            <ellipse cx="17.3" cy="6.7" rx="2.2" ry="3.2" transform="rotate(45 17.3 6.7)" />
+            <ellipse cx="6.7" cy="17.3" rx="2.2" ry="3.2" transform="rotate(45 6.7 17.3)" />
+            <ellipse cx="17.3" cy="17.3" rx="2.2" ry="3.2" transform="rotate(-45 17.3 17.3)" />
+          </g>
+          <circle cx="12" cy="12" r="3.2" fill="#e8b923" stroke="#1d1b18" stroke-width="0.9" />
+        </svg>
+        <div>Ask Daisy anything — type below, or press the mic and speak.</div>
+      </div>
+    </div>
+
+    <!-- =================== COMPOSER =================== -->
+    <div class="composer-wrap">
+      <div class="composer">
+        <textarea id="ta" rows="1" placeholder="Ask Daisy, or speak — &quot;Hey Daisy, …&quot;"></textarea>
+        <div class="composer-row">
+          <button class="pill has-border" id="undoBtn" disabled title="Nothing to undo">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>
+            Undo
+            <span class="count" id="undoCount" hidden>0</span>
+          </button>
+          <button class="pill" id="modelPill" title="Open settings">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
+            <span id="modelPillText">model</span>
+          </button>
+          <span class="spacer"></span>
+          <button class="mic" title="Push to talk" id="micBtn" aria-label="Push to talk">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+          </button>
+          <button class="send" id="sendBtn" disabled title="Send" aria-label="Send">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 14-7-4 16-3-7-7-2z"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="composer-hint">
+        <span>Daisy asks before risky actions. Undo reverses the last reversible one.</span>
+        <span><kbd>↵</kbd> send · <kbd>⇧↵</kbd> newline · <kbd>⌘ K</kbd> focus</span>
+      </div>
+    </div>
+
+  </main>
+
+</div>
+
+<!-- =================== SLIDE-OVER (settings / keys / memory / log) =================== -->
+<div id="slideoverRoot" hidden>
+  <div class="slideover-backdrop" id="slideoverBackdrop"></div>
+  <div class="slideover" role="dialog" aria-modal="true" aria-label="Daisy settings">
+    <div class="slideover-head">
+      <h2 id="slideoverTitle">Settings</h2>
+      <button class="icon-btn" id="slideoverClose" title="Close" aria-label="Close panel">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="slideover-tabs" role="tablist" aria-label="Panels">
+      <button role="tab" data-tab="settings" aria-selected="true">Settings</button>
+      <button role="tab" data-tab="keys" aria-selected="false">API keys</button>
+      <button role="tab" data-tab="memory" aria-selected="false">Memory</button>
+      <button role="tab" data-tab="log" aria-selected="false">Activity log</button>
+    </div>
+    <div class="slideover-body">
+
+      <!-- Settings tab -->
+      <section id="tab-settings" role="tabpanel" aria-label="Settings">
+        <p class="panel-note">How Daisy thinks and speaks. Saved to <code>~/.daisy/config.yaml</code>.</p>
+        <div class="field">
+          <label for="set-llm-provider">Brain (LLM provider)</label>
+          <select id="set-llm-provider">
+            <option value="openai">openai</option>
+            <option value="anthropic">anthropic</option>
+            <option value="groq">groq</option>
+            <option value="local_http">local_http</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="set-llm-model">Model name</label>
+          <input type="text" id="set-llm-model" placeholder="e.g. gpt-4o-mini" />
+        </div>
+        <div class="field">
+          <label for="set-tts-provider">Voice output (TTS provider)</label>
+          <select id="set-tts-provider">
+            <option value="openai">openai</option>
+            <option value="kokoro">kokoro</option>
+            <option value="piper">piper</option>
+            <option value="say">say</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="set-tts-voice">Voice name</label>
+          <input type="text" id="set-tts-voice" placeholder="e.g. nova" />
+        </div>
+        <div class="field">
+          <label for="set-stt-provider">Speech recognition (STT provider)</label>
+          <input type="text" id="set-stt-provider" placeholder="e.g. openai" />
+        </div>
+        <div class="field-row">
+          <input type="checkbox" id="set-wake-word" />
+          <label for="set-wake-word">Wake word ("Hey Daisy") enabled</label>
+        </div>
+        <div class="field-row">
+          <input type="checkbox" id="set-reminder" />
+          <label for="set-reminder">Reminder scheduler enabled</label>
+        </div>
+        <button class="btn" id="settingsSave">Save settings</button>
+        <p class="panel-status" id="settingsStatus" role="status"></p>
+      </section>
+
+      <!-- API keys tab -->
+      <section id="tab-keys" role="tabpanel" aria-label="API keys" hidden>
+        <p class="panel-note">Keys are stored in the macOS Keychain. Daisy never shows a stored value — you can only replace or delete it.</p>
+        <div id="keysList"><p class="panel-empty">Loading…</p></div>
+        <p class="panel-status" id="keysStatus" role="status"></p>
+      </section>
+
+      <!-- Memory tab -->
+      <section id="tab-memory" role="tabpanel" aria-label="Memory" hidden>
+        <p class="panel-note">What Daisy remembers about you. Forgetting a topic removes it for good.</p>
+        <div id="memoryList"><p class="panel-empty">Loading…</p></div>
+        <p class="panel-status" id="memoryStatus" role="status"></p>
+      </section>
+
+      <!-- Activity log tab -->
+      <section id="tab-log" role="tabpanel" aria-label="Activity log" hidden>
+        <p class="panel-note">The last 50 things Daisy did, from the audit log.</p>
+        <button class="btn subtle small" id="logRefresh">Refresh</button>
+        <div id="logList" style="margin-top:10px;"><p class="panel-empty">Loading…</p></div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<script>
+  'use strict';
+  const API = (path) => `${window.location.origin}${path}`;
+  const $ = (id) => document.getElementById(id);
+
+  // ---------- helpers ----------
+
+  function relTime(v) {
+    if (v === null || v === undefined || v === '') return '';
+    let d;
+    if (typeof v === 'number') d = new Date(v > 1e12 ? v : v * 1000);
+    else d = new Date(v);
+    if (isNaN(d.getTime())) return '';
+    const s = Math.max(0, (Date.now() - d.getTime()) / 1000);
+    if (s < 60) return 'now';
+    if (s < 3600) return Math.floor(s / 60) + 'm';
+    if (s < 86400) return Math.floor(s / 3600) + 'h';
+    return Math.floor(s / 86400) + 'd';
+  }
+
+  function clockTime(v) {
+    if (v === null || v === undefined || v === '') return '';
+    let d;
+    if (typeof v === 'number') d = new Date(v > 1e12 ? v : v * 1000);
+    else d = new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    return d.toLocaleString();
+  }
+
+  function describeEntry(e) {
+    if (e === null || e === undefined) return '';
+    if (typeof e === 'string') return e;
+    return e.description || e.summary || e.label || e.message || e.kind ||
+           e.type || e.action || JSON.stringify(e);
+  }
+
+  // ---------- thread (the ONE real conversation surface) ----------
+
+  const thread = $('thread');
+  const threadEmpty = $('threadEmpty');
+
+  const DAISY_AVATAR_SVG =
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+    '<g fill="#1d1b18">' +
+    '<ellipse cx="12" cy="5" rx="1.8" ry="3"/><ellipse cx="12" cy="19" rx="1.8" ry="3"/>' +
+    '<ellipse cx="5" cy="12" rx="3" ry="1.8"/><ellipse cx="19" cy="12" rx="3" ry="1.8"/>' +
+    '</g><circle cx="12" cy="12" r="2.4" fill="#fbfaf6"/></svg>';
+
+  function addMsg(role, text) {
+    if (threadEmpty && threadEmpty.parentNode) threadEmpty.remove();
+
+    const msg = document.createElement('div');
+    msg.className = 'msg' + (role === 'system' ? ' system' : '');
+
+    const gutter = document.createElement('div');
+    gutter.className = 'gutter';
+    const av = document.createElement('div');
+    if (role === 'user') {
+      av.className = 'avatar-sm you';
+      av.textContent = 'P';
+    } else if (role === 'daisy') {
+      av.className = 'avatar-sm daisy';
+      av.innerHTML = DAISY_AVATAR_SVG; // static markup, never dynamic data
+    } else {
+      av.className = 'avatar-sm system';
+      av.textContent = 'i';
+    }
+    gutter.appendChild(av);
+
+    const body = document.createElement('div');
+    body.className = 'body';
+    const who = document.createElement('div');
+    who.className = 'who';
+    who.textContent = role === 'user' ? 'You' : role === 'daisy' ? 'Daisy' : 'System';
+    const when = document.createElement('span');
+    when.className = 'when';
+    when.textContent = '· ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    who.appendChild(when);
+    const textEl = document.createElement('div');
+    textEl.className = 'text';
+    textEl.textContent = text; // ALWAYS textContent — server/LLM text is never injected as HTML
+    body.appendChild(who);
+    body.appendChild(textEl);
+
+    msg.appendChild(gutter);
+    msg.appendChild(body);
+    thread.appendChild(msg);
+    thread.scrollTop = thread.scrollHeight;
+    return { msg, body, textEl };
+  }
+
+  function addRunningPill(container, label) {
+    const wrap = document.createElement('div');
+    wrap.style.marginTop = '10px';
+    const pill = document.createElement('div');
+    pill.className = 'running-pill';
+    const ring = document.createElement('span');
+    ring.className = 'ring';
+    const lbl = document.createElement('span');
+    lbl.textContent = label;
+    pill.appendChild(ring);
+    pill.appendChild(lbl);
+    wrap.appendChild(pill);
+    container.appendChild(wrap);
+    thread.scrollTop = thread.scrollHeight;
+    return wrap;
+  }
+
+  // ---------- composer + turn streaming ----------
+
+  const ta = $('ta');
+  const send = $('sendBtn');
+  let streaming = false;
+  let lastTurnText = null;
+
+  const grow = () => {
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 200) + 'px';
+    send.disabled = streaming || ta.value.trim().length === 0;
+  };
+  ta.addEventListener('input', grow);
+
+  function setStreaming(on) {
+    streaming = on;
+    send.disabled = on || ta.value.trim().length === 0;
+  }
+
+  // Offline banner ("Daisy is offline — she may be restarting.")
+  let offlineBanner = null;
+  function showOfflineBanner() {
+    if (offlineBanner) return;
+    offlineBanner = document.createElement('div');
+    offlineBanner.className = 'top-banner offline';
+    offlineBanner.setAttribute('role', 'alert');
+    const txt = document.createElement('span');
+    txt.textContent = 'Daisy is offline — she may be restarting.';
+    const retry = document.createElement('button');
+    retry.className = 'primary';
+    retry.textContent = '⟳ Retry';
+    retry.addEventListener('click', () => {
+      hideOfflineBanner();
+      if (lastTurnText) {
+        const pending = addMsg('daisy', 'Daisy is reconnecting…');
+        setStreaming(true);
+        runTurnStream(lastTurnText, pending, 1);
+      } else {
+        bootStatus(); // no pending turn — just re-check the server
+      }
+    });
+    const dismiss = document.createElement('button');
+    dismiss.className = 'ghost';
+    dismiss.textContent = 'Dismiss';
+    dismiss.addEventListener('click', hideOfflineBanner);
+    offlineBanner.appendChild(txt);
+    offlineBanner.appendChild(retry);
+    offlineBanner.appendChild(dismiss);
+    document.body.appendChild(offlineBanner);
+  }
+  function hideOfflineBanner() {
+    if (offlineBanner) { offlineBanner.remove(); offlineBanner = null; }
+  }
+
+  // Stream one turn over SSE. `attempt` 0 = first try (auto-retries once
+  // after 2s on error); 1 = last try (failure shows the offline banner).
+  // NOTE: /api/turn-stream takes ONLY `text` — auto_approve was removed
+  // server-side in 1.6 and must not be sent here.
+  function runTurnStream(text, pending, attempt) {
+    let finished = false;
+    const pillWrap = addRunningPill(pending.body, 'Daisy is thinking…');
+
+    const finish = () => {
+      finished = true;
+      pillWrap.remove();
+      setStreaming(false);
+      refreshTasks();
+      refreshUndo();
+    };
+
+    if (typeof EventSource === 'undefined') {
+      // Old-browser fallback: plain JSON turn (no auto_approve — server default applies).
+      fetch(API('/api/turn'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      }).then(r => r.json()).then(data => {
+        pending.textEl.textContent = data.response || '(no response)';
+        finish();
+      }).catch(() => {
+        pending.textEl.textContent = 'Connection failed.';
+        finish();
+        showOfflineBanner();
+      });
+      return;
+    }
+
+    const url = API('/api/turn-stream') + '?text=' + encodeURIComponent(text);
+    const es = new EventSource(url);
+
+    es.addEventListener('partial', (ev) => {
+      try { pending.textEl.textContent = JSON.parse(ev.data).text || ''; } catch (e) {}
+      thread.scrollTop = thread.scrollHeight;
+    });
+    es.addEventListener('done', (ev) => {
+      try {
+        const t = JSON.parse(ev.data).text;
+        if (t) pending.textEl.textContent = t;
+      } catch (e) {}
+      es.close();
+      finish();
+    });
+    es.onerror = () => {
+      if (finished) return;
+      es.close();
+      pillWrap.remove();
+      if (attempt === 0) {
+        pending.textEl.textContent = 'Daisy is reconnecting…';
+        setTimeout(() => {
+          if (!finished) runTurnStream(text, pending, 1);
+        }, 2000);
+      } else {
+        pending.textEl.textContent = 'Could not reach Daisy.';
+        setStreaming(false);
+        showOfflineBanner();
+      }
+    };
+  }
+
+  function sendTurn(text) {
+    if (streaming) return;
+    hideOfflineBanner();
+    lastTurnText = text;
+    addMsg('user', text);
+    const pending = addMsg('daisy', '…');
+    setStreaming(true);
+    runTurnStream(text, pending, 0);
+  }
+
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      const text = ta.value.trim();
+      if (text && !streaming) {
+        ta.value = '';
+        grow();
+        sendTurn(text);
+      }
+    }
+  });
+  send.addEventListener('click', () => {
+    const text = ta.value.trim();
+    if (!text || streaming) return;
+    ta.value = '';
+    grow();
+    sendTurn(text);
+  });
+
+  // ---------- mic (POST /api/listen) ----------
+
+  const mic = $('micBtn');
+  let listening = false;
+  mic.addEventListener('click', async () => {
+    if (listening || streaming) return;
+    listening = true;
+    mic.classList.add('recording');
+    mic.disabled = false;
+    try {
+      const r = await fetch(API('/api/listen'), { method: 'POST' });
+      let data = null;
+      try { data = await r.json(); } catch (e) { data = null; }
+      if (!r.ok) {
+        const detail = (data && (data.detail || data.error)) || ('HTTP ' + r.status);
+        addMsg('system', 'Microphone problem: ' + detail);
+        return;
+      }
+      if (data && data.transcript) addMsg('user', data.transcript + '  (via voice)');
+      if (data && data.response) addMsg('daisy', data.response);
+      refreshTasks();
+      refreshUndo();
+    } catch (e) {
+      addMsg('system', 'Microphone request failed: ' + e);
+    } finally {
+      listening = false;
+      mic.classList.remove('recording');
+    }
+  });
+
+  // ---------- sidebar tasks (GET /api/tasks) ----------
+
+  const taskList = $('taskList');
+  const taskSearch = $('taskSearch');
+  let allTasks = [];
+
+  function taskTitle(t) {
+    return String(t.title || t.description || t.text || t.content || t.task || ('Task #' + t.id));
+  }
+  function taskIsDone(t) {
+    const s = String(t.status || '').toLowerCase();
+    return t.completed === true || t.done === true ||
+           s === 'done' || s === 'completed' || s === 'complete';
+  }
+
+  function renderTasks() {
+    const q = taskSearch.value.trim().toLowerCase();
+    const visible = allTasks.filter(t => !q || taskTitle(t).toLowerCase().includes(q));
+    taskList.replaceChildren();
+
+    if (visible.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'tasks-empty';
+      empty.textContent = q
+        ? 'No tasks match your search.'
+        : 'No tasks yet. Ask Daisy to remind you of something.';
+      taskList.appendChild(empty);
+      return;
+    }
+
+    const open = visible.filter(t => !taskIsDone(t));
+    const done = visible.filter(taskIsDone).slice(0, 20);
+
+    const addSection = (label, items, isDone) => {
+      if (items.length === 0) return;
+      const sl = document.createElement('div');
+      sl.className = 'section-label';
+      sl.textContent = label;
+      taskList.appendChild(sl);
+      for (const t of items) {
+        const row = document.createElement('div');
+        row.className = 'task' + (isDone ? ' done' : '');
+        row.setAttribute('role', 'listitem');
+
+        const main = document.createElement('button');
+        main.type = 'button';
+        main.className = 'task-main';
+        const top = document.createElement('span');
+        top.className = 'row';
+        const title = document.createElement('span');
+        title.className = 'title';
+        title.textContent = taskTitle(t);
+        title.title = taskTitle(t);
+        const meta = document.createElement('span');
+        meta.className = 'meta';
+        meta.textContent = relTime(t.created_at || t.created || t.timestamp || t.ts);
+        top.appendChild(title);
+        top.appendChild(meta);
+        main.appendChild(top);
+        const due = t.due_at || t.due || t.due_iso;
+        if (due) {
+          const sub = document.createElement('span');
+          sub.className = 'sub';
+          sub.textContent = 'due ' + clockTime(due);
+          main.appendChild(sub);
+        }
+
+        const check = document.createElement('button');
+        check.type = 'button';
+        check.className = 'task-check';
+        check.textContent = '✓';
+        if (isDone) {
+          check.disabled = true;
+          check.setAttribute('aria-label', 'Task completed');
+        } else {
+          check.setAttribute('aria-label', 'Mark "' + taskTitle(t) + '" done');
+          check.title = 'Mark done';
+          check.addEventListener('click', async () => {
+            check.disabled = true;
+            try {
+              const r = await fetch(API('/api/tasks/' + encodeURIComponent(t.id) + '/done'), { method: 'POST' });
+              if (!r.ok) addMsg('system', 'Could not mark task done (HTTP ' + r.status + ').');
+            } catch (e) {
+              addMsg('system', 'Could not mark task done: ' + e);
+            }
+            refreshTasks();
+          });
+        }
+
+        row.appendChild(main);
+        row.appendChild(check);
+        taskList.appendChild(row);
+      }
+    };
+
+    addSection('Open', open, false);
+    addSection('Done', done, true);
+  }
+
+  async function refreshTasks() {
+    try {
+      const r = await fetch(API('/api/tasks'));
+      if (!r.ok) return;
+      const data = await r.json();
+      allTasks = Array.isArray(data) ? data : (data.tasks || []);
+      renderTasks();
+    } catch (e) { /* server unreachable — keep last known list */ }
+  }
+  taskSearch.addEventListener('input', renderTasks);
+
+  // ---------- undo (GET/POST /api/undo) ----------
+
+  const undoBtn = $('undoBtn');
+  const undoCount = $('undoCount');
+  let undoStack = [];
+
+  async function refreshUndo() {
+    try {
+      const r = await fetch(API('/api/undo'));
+      if (!r.ok) return;
+      const data = await r.json();
+      undoStack = data.undo_stack || [];
+    } catch (e) {
+      return;
+    }
+    const n = undoStack.length;
+    undoCount.hidden = n === 0;
+    undoCount.textContent = String(n);
+    undoBtn.disabled = n === 0;
+    undoBtn.title = n === 0
+      ? 'Nothing to undo'
+      : 'Undo: ' + describeEntry(undoStack[n - 1]);
+  }
+
+  undoBtn.addEventListener('click', async () => {
+    if (undoBtn.disabled) return;
+    undoBtn.disabled = true;
+    try {
+      const r = await fetch(API('/api/undo'), { method: 'POST' });
+      let data = null;
+      try { data = await r.json(); } catch (e) { data = null; }
+      if (r.ok) {
+        addMsg('system', 'Undid last action: ' + (describeEntry(data) || 'done.'));
+      } else {
+        const detail = (data && (data.detail || data.error)) || ('HTTP ' + r.status);
+        addMsg('system', 'Undo failed: ' + detail);
+      }
+    } catch (e) {
+      addMsg('system', 'Undo request failed: ' + e);
+    }
+    refreshUndo();
+    refreshTasks();
+  });
+
+  // ---------- slide-over panel (settings / keys / memory / log) ----------
+
+  const slideoverRoot = $('slideoverRoot');
+  const tabButtons = Array.from(document.querySelectorAll('.slideover-tabs [role="tab"]'));
+  const tabPanels = {
+    settings: $('tab-settings'),
+    keys: $('tab-keys'),
+    memory: $('tab-memory'),
+    log: $('tab-log'),
+  };
+  const tabTitles = { settings: 'Settings', keys: 'API keys', memory: 'Memory', log: 'Activity log' };
+  let lastFocused = null;
+
+  function selectTab(name) {
+    for (const b of tabButtons) b.setAttribute('aria-selected', String(b.dataset.tab === name));
+    for (const [k, panel] of Object.entries(tabPanels)) panel.hidden = (k !== name);
+    $('slideoverTitle').textContent = tabTitles[name] || 'Settings';
+    if (name === 'settings') loadSettings();
+    if (name === 'keys') loadKeys();
+    if (name === 'memory') loadMemory();
+    if (name === 'log') loadLog();
+  }
+  tabButtons.forEach(b => b.addEventListener('click', () => selectTab(b.dataset.tab)));
+
+  function openPanel(tab) {
+    lastFocused = document.activeElement;
+    slideoverRoot.hidden = false;
+    selectTab(tab);
+    $('slideoverClose').focus();
+  }
+  function closePanel() {
+    slideoverRoot.hidden = true;
+    if (lastFocused && lastFocused.focus) lastFocused.focus();
+  }
+  $('settingsBtn').addEventListener('click', () => openPanel('settings'));
+  $('memoryBtn').addEventListener('click', () => openPanel('memory'));
+  $('logBtn').addEventListener('click', () => openPanel('log'));
+  $('slideoverClose').addEventListener('click', closePanel);
+  $('slideoverBackdrop').addEventListener('click', closePanel);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !slideoverRoot.hidden) closePanel();
+  });
+
+  function setStatus(el, text, ok) {
+    el.textContent = text;
+    el.className = 'panel-status show ' + (ok ? 'ok' : 'err');
+    if (ok) setTimeout(() => { el.className = 'panel-status'; }, 6000);
+  }
+
+  // --- settings tab ---
+  let loadedSettings = null;
+  const settingsFields = {
+    llm_provider: () => $('set-llm-provider').value,
+    llm_model: () => $('set-llm-model').value.trim(),
+    tts_provider: () => $('set-tts-provider').value,
+    tts_voice: () => $('set-tts-voice').value.trim(),
+    stt_provider: () => $('set-stt-provider').value.trim(),
+    wake_word_enabled: () => $('set-wake-word').checked,
+    reminder_enabled: () => $('set-reminder').checked,
+  };
+
+  async function loadSettings() {
+    try {
+      const r = await fetch(API('/api/settings'));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const s = await r.json();
+      loadedSettings = s;
+      $('set-llm-provider').value = s.llm_provider || 'openai';
+      $('set-llm-model').value = s.llm_model || '';
+      $('set-tts-provider').value = s.tts_provider || 'openai';
+      $('set-tts-voice').value = s.tts_voice || '';
+      $('set-stt-provider').value = s.stt_provider || '';
+      $('set-wake-word').checked = !!s.wake_word_enabled;
+      $('set-reminder').checked = !!s.reminder_enabled;
+      updateStatusFooter(s);
+    } catch (e) {
+      setStatus($('settingsStatus'), 'Could not load settings: ' + e.message, false);
+    }
+  }
+
+  $('settingsSave').addEventListener('click', async () => {
+    if (!loadedSettings) { loadSettings(); return; }
+    const patch = {};
+    for (const [key, getter] of Object.entries(settingsFields)) {
+      const val = getter();
+      if (val !== loadedSettings[key] && !(val === '' && !loadedSettings[key])) {
+        patch[key] = val;
+      }
+    }
+    if (Object.keys(patch).length === 0) {
+      setStatus($('settingsStatus'), 'Nothing changed.', true);
+      return;
+    }
+    try {
+      const r = await fetch(API('/api/settings'), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || data.error || ('HTTP ' + r.status));
+      setStatus($('settingsStatus'), 'Saved. ' + (data.note || ''), true);
+      loadSettings();
+      bootStatus();
+    } catch (e) {
+      setStatus($('settingsStatus'), 'Save failed: ' + e.message, false);
+    }
+  });
+
+  // --- API keys tab (GET/POST/DELETE /api/keychain) ---
+  async function loadKeys() {
+    const list = $('keysList');
+    list.replaceChildren();
+    const loading = document.createElement('p');
+    loading.className = 'panel-empty';
+    loading.textContent = 'Loading…';
+    list.appendChild(loading);
+    try {
+      const r = await fetch(API('/api/keychain'));
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+      list.replaceChildren();
+      if (!data.available) {
+        const p = document.createElement('p');
+        p.className = 'panel-empty';
+        p.textContent = 'Keychain is not available on this system (macOS only).';
+        list.appendChild(p);
+        return;
+      }
+      const setKeys = new Set(data.set_keys || []);
+      for (const name of (data.known_keys || [])) {
+        const card = document.createElement('div');
+        card.className = 'kv-card';
+
+        const head = document.createElement('div');
+        head.className = 'kv-head';
+        const nm = document.createElement('span');
+        nm.className = 'kv-name';
+        nm.textContent = name;
+        const state = document.createElement('span');
+        const isSet = setKeys.has(name);
+        state.className = 'kv-state ' + (isSet ? 'set' : 'unset');
+        state.textContent = isSet ? 'set' : 'not set';
+        head.appendChild(nm);
+        head.appendChild(state);
+        card.appendChild(head);
+
+        const row = document.createElement('div');
+        row.className = 'kv-row';
+        const input = document.createElement('input');
+        input.type = 'password';
+        input.placeholder = isSet ? 'Replace value…' : 'Paste key value…';
+        input.setAttribute('aria-label', 'Value for ' + name);
+        input.autocomplete = 'off';
+        const saveBtn = document.createElement('button');
+        saveBtn.className = 'btn small';
+        saveBtn.textContent = 'Save';
+        saveBtn.addEventListener('click', async () => {
+          const value = input.value;
+          if (!value.trim()) { setStatus($('keysStatus'), 'Enter a value first.', false); return; }
+          saveBtn.disabled = true;
+          try {
+            const rr = await fetch(API('/api/keychain'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name, value }),
+            });
+            const dd = await rr.json();
+            if (!rr.ok) throw new Error(dd.detail || ('HTTP ' + rr.status));
+            setStatus($('keysStatus'), name + ' saved to Keychain.', true);
+            loadKeys();
+          } catch (e) {
+            setStatus($('keysStatus'), 'Save failed: ' + e.message, false);
+            saveBtn.disabled = false;
+          }
+        });
+        row.appendChild(input);
+        row.appendChild(saveBtn);
+        if (isSet) {
+          const delBtn = document.createElement('button');
+          delBtn.className = 'btn small danger';
+          delBtn.textContent = 'Delete';
+          delBtn.setAttribute('aria-label', 'Delete ' + name);
+          delBtn.addEventListener('click', async () => {
+            delBtn.disabled = true;
+            try {
+              const rr = await fetch(API('/api/keychain/' + encodeURIComponent(name)), { method: 'DELETE' });
+              const dd = await rr.json();
+              if (!rr.ok) throw new Error(dd.detail || ('HTTP ' + rr.status));
+              setStatus($('keysStatus'), name + ' removed from Keychain.', true);
+              loadKeys();
+            } catch (e) {
+              setStatus($('keysStatus'), 'Delete failed: ' + e.message, false);
+              delBtn.disabled = false;
+            }
+          });
+          row.appendChild(delBtn);
+        }
+        card.appendChild(row);
+        list.appendChild(card);
+      }
+    } catch (e) {
+      list.replaceChildren();
+      const p = document.createElement('p');
+      p.className = 'panel-empty';
+      p.textContent = 'Could not load keys: ' + e.message;
+      list.appendChild(p);
+    }
+  }
+
+  // --- memory tab (GET /api/memory, DELETE /api/memory/{topic}) ---
+  async function loadMemory() {
+    const list = $('memoryList');
+    list.replaceChildren();
+    const loading = document.createElement('p');
+    loading.className = 'panel-empty';
+    loading.textContent = 'Loading…';
+    list.appendChild(loading);
+    try {
+      const r = await fetch(API('/api/memory'));
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+      const memories = data.memories || [];
+      list.replaceChildren();
+      if (memories.length === 0) {
+        const p = document.createElement('p');
+        p.className = 'panel-empty';
+        p.textContent = 'Daisy has not remembered anything yet. Try: "Remember that my dog is called Rex."';
+        list.appendChild(p);
+        return;
+      }
+      for (const m of memories) {
+        const topic = String(m.topic || m.key || m.name || '');
+        const content = String(m.content || m.value || m.text || '');
+        const card = document.createElement('div');
+        card.className = 'kv-card';
+
+        const head = document.createElement('div');
+        head.className = 'kv-head';
+        const nm = document.createElement('span');
+        nm.className = 'kv-name';
+        nm.textContent = topic;
+        head.appendChild(nm);
+        const when = m.updated_at || m.created_at || m.timestamp;
+        if (when) {
+          const meta = document.createElement('span');
+          meta.className = 'kv-state unset';
+          meta.textContent = relTime(when) || '';
+          head.appendChild(meta);
+        }
+        card.appendChild(head);
+
+        const body = document.createElement('div');
+        body.className = 'kv-content';
+        body.textContent = content;
+        card.appendChild(body);
+
+        const forget = document.createElement('button');
+        forget.className = 'btn small danger';
+        forget.textContent = 'Forget';
+        forget.setAttribute('aria-label', 'Forget memory: ' + topic);
+        forget.addEventListener('click', async () => {
+          forget.disabled = true;
+          try {
+            const rr = await fetch(API('/api/memory/' + encodeURIComponent(topic)), { method: 'DELETE' });
+            const dd = await rr.json();
+            if (!rr.ok) throw new Error(dd.detail || ('HTTP ' + rr.status));
+            setStatus($('memoryStatus'), 'Forgot "' + topic + '".', true);
+            loadMemory();
+          } catch (e) {
+            setStatus($('memoryStatus'), 'Could not forget: ' + e.message, false);
+            forget.disabled = false;
+          }
+        });
+        card.appendChild(forget);
+        list.appendChild(card);
+      }
+    } catch (e) {
+      list.replaceChildren();
+      const p = document.createElement('p');
+      p.className = 'panel-empty';
+      p.textContent = 'Could not load memories: ' + e.message;
+      list.appendChild(p);
+    }
+  }
+
+  // --- activity log tab (GET /api/log?lines=50) ---
+  async function loadLog() {
+    const list = $('logList');
+    list.replaceChildren();
+    const loading = document.createElement('p');
+    loading.className = 'panel-empty';
+    loading.textContent = 'Loading…';
+    list.appendChild(loading);
+    try {
+      const r = await fetch(API('/api/log?lines=50'));
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+      const entries = (data.entries || []).slice().reverse(); // newest first
+      list.replaceChildren();
+      if (entries.length === 0) {
+        const p = document.createElement('p');
+        p.className = 'panel-empty';
+        p.textContent = 'The audit log is empty.';
+        list.appendChild(p);
+        return;
+      }
+      for (const e of entries) {
+        const row = document.createElement('div');
+        row.className = 'log-entry';
+        const top = document.createElement('div');
+        top.className = 'log-top';
+        const type = document.createElement('span');
+        type.className = 'log-type';
+        type.textContent = String(e.type || e.event || e.kind || e.action || 'event');
+        const when = document.createElement('span');
+        when.className = 'log-when';
+        when.textContent = clockTime(e.timestamp || e.ts || e.time || e.created_at || '');
+        top.appendChild(type);
+        top.appendChild(when);
+        const summary = document.createElement('div');
+        summary.className = 'log-summary';
+        summary.textContent = String(
+          e.summary || e.detail || e.message || e.description || e.text || e.raw ||
+          JSON.stringify(e)
+        );
+        row.appendChild(top);
+        row.appendChild(summary);
+        list.appendChild(row);
+      }
+    } catch (e) {
+      list.replaceChildren();
+      const p = document.createElement('p');
+      p.className = 'panel-empty';
+      p.textContent = 'Could not load the log: ' + e.message;
+      list.appendChild(p);
+    }
+  }
+  $('logRefresh').addEventListener('click', loadLog);
+
+  // ---------- misc shell behaviour ----------
+
+  $('newTaskBtn').addEventListener('click', () => ta.focus());
+  $('modelPill').addEventListener('click', () => openPanel('settings'));
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      e.preventDefault();
+      ta.focus();
+    }
+  });
+
+  function updateStatusFooter(s) {
+    $('statusModel').textContent = (s.llm_provider || '?') + ' · ' + (s.llm_model || '?');
+    $('statusVoice').textContent = (s.tts_voice || 'voice') + ' · ' + (s.tts_provider || '?');
+    $('modelPillText').textContent = (s.llm_provider || '?') + ' · ' + (s.llm_model || '?');
+  }
+
+  // ---------- boot: state, settings, tasks, undo, permissions ----------
+
+  async function bootStatus() {
+    try {
+      const r = await fetch(API('/api/state'));
+      if (!r.ok) return;
+      const s = await r.json();
+      $('verBadge').textContent = 'v' + (s.version || '1.6');
+      const chip = $('providerChip');
+      chip.textContent = 'providers: ' + ((s.providers || []).join(' → ') || 'none');
+      const pulse = $('listeningPulse');
+      const lt = $('listeningText');
+      if (s.wake_word_enabled) {
+        pulse.classList.remove('off');
+        lt.replaceChildren();
+        lt.appendChild(document.createTextNode('Listening for '));
+        const kbd = document.createElement('kbd');
+        kbd.textContent = '"Hey Daisy"';
+        lt.appendChild(kbd);
+      } else {
+        pulse.classList.add('off');
+        lt.textContent = 'Wake word off — use the mic or type';
+      }
+      $('listeningPill').title = 'providers: ' + (s.providers || []).join(' → ');
+      hideOfflineBanner();
+    } catch (e) { /* server not up yet */ }
+
+    try {
+      const r = await fetch(API('/api/settings'));
+      if (r.ok) updateStatusFooter(await r.json());
+    } catch (e) { /* ignore */ }
+  }
+
+  // First-run permission banner (kept from 1.0, rebuilt without innerHTML).
+  (async () => {
+    try {
+      const r = await fetch(API('/api/permissions'));
+      const p = await r.json();
+      const missing = Object.entries(p).filter(([_, v]) => !v).map(([k]) => k);
+      if (missing.length === 0) return;
+      const banner = document.createElement('div');
+      banner.className = 'top-banner warn';
+      const txt = document.createElement('span');
+      txt.textContent = 'Daisy needs access to: ' + missing.join(', ') + '.';
+      const grant = document.createElement('button');
+      grant.className = 'primary';
+      grant.textContent = 'Open Settings';
+      grant.addEventListener('click', () => {
+        const kindMap = { microphone: 'mic', accessibility: 'accessibility', screen_recording: 'screen' };
+        const first = missing[0];
+        fetch(API('/api/permissions/open?kind=') + (kindMap[first] || 'mic'));
+      });
+      const dismiss = document.createElement('button');
+      dismiss.className = 'ghost';
+      dismiss.textContent = 'Dismiss';
+      dismiss.addEventListener('click', () => banner.remove());
+      banner.appendChild(txt);
+      banner.appendChild(grant);
+      banner.appendChild(dismiss);
+      document.body.appendChild(banner);
+    } catch (e) { /* ignore */ }
+  })();
+
+  bootStatus();
+  refreshTasks();
+  refreshUndo();
+</script>
+</body>
+</html>
