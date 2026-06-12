@@ -1,0 +1,220 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #07070a;
+  --fg: #ededed;
+  --fg-muted: #999;
+  --accent: #f9a8d4;
+  --border: rgba(255, 255, 255, 0.08);
+  --surface: rgba(255, 255, 255, 0.03);
+}
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--fg);
+  --color-muted: var(--fg-muted);
+  --color-accent: var(--accent);
+  --color-border: var(--border);
+}
+
+html { color-scheme: dark; }
+
+body {
+  background: radial-gradient(900px 500px at 40% -5%, #1a081860, transparent 70%),
+    var(--bg);
+  color: var(--fg);
+  min-height: 100vh;
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+.glass {
+  background: rgba(20, 20, 28, 0.6);
+  backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 9999px;
+  padding: 0.625rem 1.5rem;
+  font-weight: 600;
+  font-size: 0.875rem;
+  transition: all 0.2s;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn-primary { background: var(--accent); color: #000; }
+.btn-primary:hover { opacity: 0.85; }
+.btn-ghost { background: rgba(255,255,255,0.05); color: var(--fg); border: 1px solid var(--border); }
+.btn-ghost:hover { background: rgba(255,255,255,0.1); }
+
+/* Section spacing helpers (used by landing page) */
+.section {
+  margin-top: 5rem;
+}
+.section-title {
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.5rem;
+}
+.section-kicker {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 0.75rem;
+}
+.section-lede {
+  color: var(--fg-muted);
+  font-size: 1rem;
+  line-height: 1.6;
+  max-width: 36rem;
+  margin-bottom: 2rem;
+}
+
+/* Hero media placeholder (user will replace with screenshot/video) */
+.hero-media {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  background: linear-gradient(135deg, rgba(249,168,212,0.08), rgba(249,168,212,0.02));
+  border: 1px dashed rgba(249,168,212,0.3);
+  border-radius: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-muted);
+  font-size: 0.85rem;
+  margin-top: 1rem;
+}
+
+/* Code block for install snippet */
+.code-block {
+  background: rgba(0,0,0,0.45);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1.25rem 1.5rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.85rem;
+  line-height: 1.7;
+  color: var(--fg);
+  overflow-x: auto;
+  white-space: pre;
+}
+.code-block .comment { color: var(--fg-muted); }
+
+/* FAQ accordion */
+details.faq {
+  border-bottom: 1px solid var(--border);
+  padding: 1rem 0;
+}
+details.faq:first-of-type {
+  border-top: 1px solid var(--border);
+}
+details.faq > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 1rem;
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+details.faq > summary::-webkit-details-marker { display: none; }
+details.faq > summary::after {
+  content: "+";
+  color: var(--accent);
+  font-size: 1.25rem;
+  font-weight: 400;
+  line-height: 1;
+}
+details.faq[open] > summary::after { content: "−"; }
+details.faq > div {
+  margin-top: 0.75rem;
+  color: var(--fg-muted);
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+/* Install variant cards (two side-by-side options) */
+.install-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+@media (min-width: 720px) {
+  .install-grid { grid-template-columns: 2fr 1fr; }
+}
+.install-tag {
+  display: inline-block;
+  background: rgba(249,168,212,0.12);
+  color: var(--accent);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.6rem;
+  border-radius: 9999px;
+  margin-bottom: 0.6rem;
+}
+.install-tag.muted {
+  background: rgba(255,255,255,0.06);
+  color: var(--fg-muted);
+}
+
+/* Waitlist form */
+.waitlist-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  max-width: 28rem;
+}
+.waitlist-form input[type="email"] {
+  flex: 1 1 14rem;
+  background: rgba(0,0,0,0.35);
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  padding: 0.625rem 1.25rem;
+  font-size: 0.9rem;
+  color: var(--fg);
+  outline: none;
+}
+.waitlist-form input[type="email"]:focus {
+  border-color: var(--accent);
+}
+.waitlist-status {
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+}
+.waitlist-status.ok { color: var(--accent); }
+.waitlist-status.err { color: #ff9a9a; }
+
+/* Changelog prose */
+.changelog-prose p { margin-bottom: 0.75rem; line-height: 1.6; }
+.changelog-prose p:last-child { margin-bottom: 0; }
+.changelog-prose ul { margin: 0.5rem 0 0 1.25rem; list-style: disc; }
+.changelog-prose li { margin-bottom: 0.35rem; line-height: 1.55; }
+.changelog-prose code {
+  background: rgba(255,255,255,0.08);
+  padding: 0.1rem 0.35rem;
+  border-radius: 0.3rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.85em;
+}
+.changelog-prose strong { color: var(--fg); }
+
+/* Nav link */
+.nav-link {
+  color: var(--fg-muted);
+  font-size: 0.85rem;
+  text-decoration: none;
+  margin-left: 1.25rem;
+}
+.nav-link:hover { color: var(--fg); }
