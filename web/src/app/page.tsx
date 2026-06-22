@@ -44,7 +44,7 @@ const FAQ = [
   },
   {
     q: "Which AI providers are supported?",
-    a: "OpenAI, Anthropic, Groq, or local Ollama. You configure a fallback chain so she keeps working if one provider rate-limits you.",
+    a: "OpenAI, Anthropic, Groq, or local Ollama, with an automatic fallback chain. v1.6 adds a free-tier rotation mode (Groq / OpenRouter / NVIDIA) for $0 running cost, plus a circuit breaker that benches a provider that keeps failing instead of retrying it every turn.",
   },
   {
     q: "What permissions does she need?",
@@ -109,7 +109,7 @@ export default function Home() {
           </a>
         </div>
         <p style={{ color: "var(--fg-muted)", fontSize: "0.8rem" }}>
-          macOS · Open source · MIT · v1.5 stable
+          macOS · Open source · MIT · v1.6 stable
         </p>
 
         {/* Demo video */}
@@ -156,7 +156,7 @@ export default function Home() {
         <p className="section-kicker">Install</p>
         <h2 className="section-title">Two ways to get her.</h2>
         <p className="section-lede">
-          v1.5 is the current stable release. Source install works today; a signed{" "}
+          v1.6 is the current stable release. Source install works today; a signed{" "}
           <code>.dmg</code> installer is on the way.
         </p>
 
@@ -170,7 +170,7 @@ export default function Home() {
             </p>
             <pre className="code-block">
               <code>{`git clone https://github.com/philipposk/Daisy--AI-Assistant-
-cd "Daisy -AI Assistant- 1.5"
+cd "Daisy -AI Assistant- 1.6"
 ./setup.sh
 python3 daisy_app.py --port 5188
 open http://localhost:5188/`}</code>
