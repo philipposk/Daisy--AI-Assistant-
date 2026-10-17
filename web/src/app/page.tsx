@@ -2,34 +2,34 @@ import { WaitlistForm } from "./_components/WaitlistForm";
 
 const FEATURES = [
   {
-    icon: "🎙️",
+    kicker: "Voice",
     title: "Wake & talk",
-    body: 'Say "Daisy" — she listens, replies out loud, and shuts up the moment you say "stop".',
+    body: 'Say "Daisy". She listens, replies out loud, and stops the moment you say "stop".',
   },
   {
-    icon: "📅",
+    kicker: "Apps",
     title: "Calendar & Mail",
-    body: "Books events, drafts emails through Mail.app, reads your inbox — all by voice.",
+    body: "Books events, drafts emails through Mail.app, reads your inbox, all by voice.",
   },
   {
-    icon: "📝",
+    kicker: "Notes",
     title: "Notes & reminders",
     body: '"Make a note about the Q3 launch." "Remind me in 2 hours to drink water." Done.',
   },
   {
-    icon: "🧠",
+    kicker: "Memory",
     title: "Remembers you",
     body: "Tell her once you prefer Python or your dog is Rex. She still knows next week.",
   },
   {
-    icon: "↩️",
+    kicker: "Undo",
     title: "Undo",
-    body: 'Say "undo that" — last note, task, reminder, or memory is reversed.',
+    body: 'Say "undo that". Last note, task, reminder, or memory is reversed.',
   },
   {
-    icon: "🔌",
+    kicker: "MCP",
     title: "MCP-powered",
-    body: "Both an MCP server and client — drives desktop automation and computer-use tools.",
+    body: "Both an MCP server and client. Drives desktop automation and computer-use tools.",
   },
 ];
 
@@ -143,7 +143,7 @@ export default function Home() {
         >
           {FEATURES.map((f) => (
             <div key={f.title} className="glass" style={{ padding: "1.5rem" }}>
-              <div style={{ fontSize: "1.75rem", marginBottom: "0.75rem" }}>{f.icon}</div>
+              <p className="section-kicker" style={{ marginBottom: "0.5rem" }}>{f.kicker}</p>
               <h3 style={{ fontWeight: 700, marginBottom: "0.5rem" }}>{f.title}</h3>
               <p style={{ color: "var(--fg-muted)", fontSize: "0.9rem", lineHeight: 1.5 }}>{f.body}</p>
             </div>
