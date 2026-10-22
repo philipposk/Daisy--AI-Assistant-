@@ -1,0 +1,13 @@
+# Daisy
+
+> A polite AI voice assistant that lives on your Mac and gets things done without nagging. Open source (MIT).
+
+## Pages
+- / — Overview, demo and waitlist
+- /changelog — Release notes
+
+## Source
+- https://github.com/philipposk/Daisy--AI-Assistant-
+
+## Contact
+Built on the 6x7 platform (https://6x7.gr)

@@ -6,6 +6,19 @@ import "./globals.css";
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://daisy.6x7.gr"),
+  alternates: { canonical: "/" },
+  manifest: "/manifest.webmanifest",
+  openGraph: {
+    title: "Daisy",
+    description: "A polite AI voice assistant that lives on your Mac and gets things done without nagging.",
+    url: "https://daisy.6x7.gr",
+    siteName: "Daisy",
+    type: "website",
+    images: [{ url: "/og-image.png", width: 1200, height: 630, alt: "Daisy" }],
+  },
+  twitter: { card: "summary_large_image", title: "Daisy", description: "A polite AI voice assistant that lives on your Mac and gets things done without nagging.", images: ["/og-image.png"] },
+  icons: { icon: "/icon.svg", apple: "/icon-192.png" },
   title: "Daisy — Your polite Mac voice assistant",
   description:
     "A polite AI voice assistant that lives on your Mac and gets things done without nagging. Open source, MIT, v1.6 stable.",
