@@ -7,7 +7,6 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://daisy.6x7.gr"),
-  alternates: { canonical: "/" },
   manifest: "/manifest.webmanifest",
   openGraph: {
     title: "Daisy",
