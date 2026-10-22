@@ -1,4 +1,9 @@
+import type { Metadata } from "next";
 import { WaitlistForm } from "./_components/WaitlistForm";
+
+// Only the home page is canonical to "/"; other pages keep their own URL.
+export const metadata: Metadata = { alternates: { canonical: "/" } };
+
 
 const FEATURES = [
   {
