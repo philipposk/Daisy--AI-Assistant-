@@ -2,10 +2,13 @@ import type { Metadata, Viewport } from "next";
 import Link from "next/link";
 import { Geist } from "next/font/google";
 import "./globals.css";
+import { SiteJsonLd } from "@/components/SiteJsonLd";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 
 export const metadata: Metadata = {
+  alternates: { canonical: "./" },
+  robots: { index: true, follow: true },
   metadataBase: new URL("https://daisy.6x7.gr"),
   manifest: "/manifest.webmanifest",
   openGraph: {
@@ -30,6 +33,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${geistSans.variable} h-full antialiased`}>
       <body className="flex min-h-full flex-col">
+        <SiteJsonLd />
         <nav
           style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}
           className="px-6 py-4 flex items-center justify-between"
